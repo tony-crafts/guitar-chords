@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>기타 코드</title>
+<style>
+:root{
+  --bg:#14120e; --panel:#1c1913; --line:#35301f;
+  --text:#ece4d2; --dim:#988e79; --gold:#f0a83a;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,'Apple SD Gothic Neo','Pretendard',sans-serif;
+  padding:24px 14px calc(28px + env(safe-area-inset-bottom));
+  max-width:520px; margin:0 auto;
+}
+header{padding:4px 4px 18px}
+header h1{font-size:24px; letter-spacing:.5px; color:var(--gold); font-weight:800}
+header p{font-size:12px; color:var(--dim); margin-top:5px; letter-spacing:.3px}
+.list{display:flex; flex-direction:column; gap:9px}
+.song{
+  display:flex; align-items:center; gap:12px; text-decoration:none;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:14px 16px; color:var(--text); transition:border-color .15s;
+}
+.song:hover,.song:focus{border-color:var(--gold)}
+.song .info{flex:1; min-width:0}
+.song .title{font-size:16px; font-weight:800; letter-spacing:.3px}
+.song .sub{font-size:11.5px; color:var(--dim); margin-top:3px}
+.song .go{color:var(--gold); font-size:18px; font-weight:800; flex:0 0 auto}
+footer{margin-top:22px; font-size:10.5px; color:#6b6250; line-height:1.6; padding:0 4px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>기타 코드</h1>
+  <p>연주용 코드 차트 · 플레이어 동기화</p>
+</header>
+
+<div class="list">
+  <a class="song" href="chords/marigold.html">
+    <div class="info">
+      <div class="title">Marigold</div>
+      <div class="sub">あいみょん · Key D · ♩=107</div>
+    </div>
+    <span class="go">›</span>
+  </a>
+  <!-- 곡 추가: 위 .song 블록을 복사해 href/제목/부제만 바꾸면 됨 -->
+</div>
+
+<footer>
+  각 곡 페이지는 컴팩트·펼침 코드 차트 + 유튜브 플레이어 동기화(마디 하이라이트)를 제공합니다.
+</footer>
+
+</body>
+</html>
