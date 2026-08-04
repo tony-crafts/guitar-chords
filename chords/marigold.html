@@ -164,6 +164,38 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 }
 .bar.now small{color:#6b5410}
 .bar.split.now i:first-child{border-right-color:#8a6d18}
+
+/* ============================ 반응형 ============================ */
+/* 1. ~767px(폰): 위 기본 스타일 그대로 (변경 없음) */
+
+/* 2. 768px~(태블릿): 섹션 카드 2단 + 컨테이너 확장 + 마디 폰트 확대 */
+@media (min-width:768px){
+  body{ max-width:900px; }
+  /* 단독 컴팩트/펼침 뷰만 2단. 플레이어 탭의 차트(viewF)는 단일 컬럼 유지 */
+  body[data-view="C"] #viewC,
+  body[data-view="F"] #viewF{ column-count:2; column-gap:18px; }
+  body[data-view="C"] #viewC > .flow, body[data-view="C"] #viewC > .legend,
+  body[data-view="F"] #viewF > .flow, body[data-view="F"] #viewF > .legend{ column-span:all; }
+  #viewC .sec, #viewF .sec, #viewF .jump{ break-inside:avoid; }
+  .bar{ font-size:16px; }
+  .bar.split i{ font-size:14px; }
+}
+
+/* 3. 1100px~(데스크톱, 플레이어 탭 한정): 좌 고정 패널 + 우 차트 스크롤 */
+@media (min-width:1100px){
+  body[data-view="P"]{
+    max-width:1400px;
+    display:grid;
+    grid-template-columns:460px minmax(0,1fr);
+    column-gap:22px; align-items:start;
+  }
+  body[data-view="P"] > header,
+  body[data-view="P"] > .tabs{ grid-column:1 / -1; }
+  body[data-view="P"] > #viewP.on{ display:block; grid-column:1; }
+  body[data-view="P"] .pwrap{ position:static; padding-bottom:0; margin-bottom:0; }
+  /* 오른쪽 차트: 자체 스크롤 컨테이너 (높이는 JS가 뷰포트에 맞춰 지정) */
+  body[data-view="P"] > #viewF{ grid-column:2; overflow-y:auto; overscroll-behavior:contain; }
+}
 </style>
 </head>
 <body>
@@ -514,7 +546,10 @@ function show(v){
   document.getElementById('tabC').classList.toggle('on', v==='C');
   document.getElementById('tabF').classList.toggle('on', v==='F');
   document.getElementById('tabP').classList.toggle('on', v==='P');
-  if(v==='P'){ initPlayer(); requestAnimationFrame(updateStickyH); }
+  document.body.setAttribute('data-view', v);   // 반응형(2단/분할) 스위칭 기준
+  if(v==='P') initPlayer();
+  // getBoundingClientRect가 동기 리플로우를 강제하므로 rAF 없이 즉시 계산 (탭 숨김 시에도 동작)
+  updateStickyH(); layoutRight();
   suppressScrollUntil = Date.now() + 700;
   window.scrollTo(0,0);
 }
@@ -596,6 +631,7 @@ function createPlayer(){
         tickId = setInterval(tick, 120);
         render(-1);
         updateStickyH();   // 영상 로드 후 sticky 높이 확정
+        layoutRight();     // 데스크톱 분할 시 우측 차트 높이 확정
       },
       // 유튜브 자체 메뉴에서 속도를 바꿔도 버튼이 따라오게
       onPlaybackRateChange: function(e){ syncRate(e.data); }
@@ -630,7 +666,7 @@ function render(n){
     el.classList.add('now');
     if(autoScroll && Date.now() > userScrollUntil){
       suppressScrollUntil = Date.now() + 700;
-      el.scrollIntoView({ block:'center' });
+      scrollToBar(el);
     }
   }
 
@@ -736,18 +772,51 @@ function toggleScroll(){
   document.getElementById('btnScroll').classList.toggle('on', autoScroll);
 }
 
-// 사용자가 직접 스크롤하면 자동 스크롤 3초 일시정지
-window.addEventListener('scroll', function(){
+// 데스크톱(≥1100px) + 플레이어 탭 → 좌우 분할 모드. 자동 스크롤 대상이 window가 아닌 #viewF
+function desktopSplit(){
+  return document.body.getAttribute('data-view') === 'P'
+      && window.matchMedia('(min-width:1100px)').matches;
+}
+
+// 분할 모드에서 우측 차트(#viewF)를 뷰포트 하단까지 채우는 스크롤 컨테이너로 만듦
+function layoutRight(){
+  const vf = document.getElementById('viewF');
+  if(desktopSplit()){
+    const top = vf.getBoundingClientRect().top;
+    vf.style.height = Math.max(240, Math.round(window.innerHeight - top - 12)) + 'px';
+  } else if(vf.style.height){
+    vf.style.height = '';   // 다른 모드로 전환 시 인라인 높이 해제
+  }
+}
+
+// 현재 마디를 화면 중앙에 — 분할 모드는 #viewF 컨테이너를, 그 외는 window를 스크롤
+function scrollToBar(el){
+  if(desktopSplit()){
+    const vf = document.getElementById('viewF');
+    const er = el.getBoundingClientRect(), sr = vf.getBoundingClientRect();
+    vf.scrollTop += (er.top - sr.top) - (vf.clientHeight - el.offsetHeight) / 2;
+  } else {
+    el.scrollIntoView({ block:'center' });
+  }
+}
+
+// 사용자가 직접 스크롤하면 자동 스크롤 3초 일시정지 (window + 우측 차트 컨테이너 양쪽)
+function onUserScroll(){
   if(Date.now() < suppressScrollUntil) return;
   userScrollUntil = Date.now() + 3000;
-}, { passive:true });
+}
+window.addEventListener('scroll', onUserScroll, { passive:true });
+document.getElementById('viewF').addEventListener('scroll', onUserScroll, { passive:true });
 
 // sticky(플레이어) 영역 실제 높이를 CSS 변수로 → #viewF .bar scroll-margin-top에 반영
 function updateStickyH(){
   const w = document.querySelector('.pwrap');
   if(w && w.offsetHeight) document.documentElement.style.setProperty('--stickyH', w.offsetHeight + 'px');
 }
-window.addEventListener('resize', updateStickyH, { passive:true });
+window.addEventListener('resize', function(){ updateStickyH(); layoutRight(); }, { passive:true });
+
+// 초기 진입 뷰(기본 컴팩트)를 data-view에 반영 → 태블릿 2단이 처음부터 적용
+document.body.setAttribute('data-view', 'C');
 </script>
 </body>
 </html>
