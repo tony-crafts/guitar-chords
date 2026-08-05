@@ -334,11 +334,9 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       <div class="pmeta" id="pMeta">— · 0/129 마디</div>
     </div>
 
+    <div id="pSpeed"></div>
+
     <div class="pctl">
-      <span class="lb">속도</span>
-      <button id="sp05" onclick="setRate(0.5)">0.5x</button>
-      <button id="sp075" onclick="setRate(0.75)">0.75x</button>
-      <button id="sp1" class="on" onclick="setRate(1)">1x</button>
       <button id="btnScroll" class="on wide" onclick="toggleScroll()">↕ 자동스크롤</button>
     </div>
 
@@ -347,6 +345,8 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       <button onclick="nudge(-0.1)">−0.1s</button>
       <button onclick="nudge(0.1)">+0.1s</button>
     </div>
+
+    <div id="pLoop"></div>
 
     <div class="pctl">
       <span class="lb">BPM</span>
@@ -537,6 +537,7 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 
 </div>
 
+<script src="practice.js"></script>
 <script>
 function show(v){
   document.getElementById('viewC').classList.toggle('on', v==='C');
@@ -625,16 +626,18 @@ function createPlayer(){
     playerVars: { playsinline: 1, rel: 0 },
     events: {
       onReady: function(){
+        if(ready) return;       // onReady 중복 발화 방지
         ready = true;
-        syncRate(player.getPlaybackRate());
+        speedCtl.onReady();     // 적응형 속도: 지원 감지 + 저장값 복원
+        loopCtl.onReady();      // A-B 루프 폴링 시작
         if(tickId) clearInterval(tickId);
         tickId = setInterval(tick, 120);
         render(-1);
         updateStickyH();   // 영상 로드 후 sticky 높이 확정
         layoutRight();     // 데스크톱 분할 시 우측 차트 높이 확정
       },
-      // 유튜브 자체 메뉴에서 속도를 바꿔도 버튼이 따라오게
-      onPlaybackRateChange: function(e){ syncRate(e.data); }
+      // 유튜브 메뉴에서 속도 변경 → 컨트롤 양방향 동기화
+      onPlaybackRateChange: function(e){ speedCtl.onPlaybackRateChange(e.data); }
     }
   });
 }
@@ -733,18 +736,18 @@ function secName(el){
 }
 
 /* ---- 컨트롤 ---- */
-function setRate(r){
-  if(ready) player.setPlaybackRate(r);
-  syncRate(r);
-}
-
-function syncRate(r){
-  rate = r;
-  document.getElementById('sp05').classList.toggle('on', r === 0.5);
-  document.getElementById('sp075').classList.toggle('on', r === 0.75);
-  document.getElementById('sp1').classList.toggle('on', r === 1);
-  render(curIdx);
-}
+// 적응형 속도 + A-B 루프 (공용 practice.js). 속도 변경 시 rate 반영 + 상태줄 갱신
+const speedCtl = Practice.createSpeed({
+  mount: document.getElementById('pSpeed'),
+  storageKey: 'mg_speed',
+  getPlayer: () => player,
+  onRate: function(r){ rate = r; render(curIdx); }
+});
+const loopCtl = Practice.createLoop({
+  mount: document.getElementById('pLoop'),
+  storageKey: 'mg_ab',
+  getPlayer: () => player
+});
 
 function markStart(){
   if(!ready) return;
