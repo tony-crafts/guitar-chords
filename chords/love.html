@@ -36,6 +36,8 @@ header .meta{font-size:11.5px; color:var(--dim); letter-spacing:.4px}
 }
 .panel h2{font-size:12px; font-weight:800; color:var(--gold); letter-spacing:.4px}
 .panel .cap{font-size:10.5px; color:var(--dim); margin-top:2px; line-height:1.5}
+/* 속도 박스 타이틀·설명·상태줄: 폰(≤767px)에서는 숨김(현재 레이아웃 유지) → 768px~에서만 노출 */
+.sp-desk{display:none}
 footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:0 2px}
 
 /* ============================ 반응형 ============================ */
@@ -52,9 +54,11 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
     margin-left:auto; margin-right:auto;
     margin-bottom:14px;
   }
-  /* 속도 · A-B 루프 패널을 한 줄 2컬럼으로 (영상+컨트롤이 한 화면에 들어오도록) */
-  .controls{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  /* 속도 · A-B 루프 패널을 한 줄 2컬럼으로 (영상+컨트롤이 한 화면에 들어오도록).
+     stretch → 두 박스 내용 높이가 미세하게 달라도 같은 높이로 정렬 */
+  .controls{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }
   .controls .panel{ margin-bottom:0; }
+  .sp-desk{ display:block; }
 }
 </style>
 </head>
@@ -71,7 +75,10 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
 
 <div class="controls">
   <div class="panel">
+    <h2 class="sp-desk">재생 속도</h2>
+    <div class="cap sp-desk">슬라이더나 [−]·[+]로 재생 속도를 조절 — 느린 구간을 천천히 반복 연습할 때.</div>
     <div id="loveSpeed"></div>
+    <div class="pr-stat sp-desk" id="loveSpeedStat">현재 1x</div>
   </div>
 
   <div class="panel">
@@ -89,11 +96,15 @@ const VIDEO_ID = 'WE_QHvDcgiY';        // love. — wave to earth
 let player = null, ready = false, apiRequested = false;
 
 // 컨트롤은 로드 시 생성(플레이어는 아직 없음 → onReady에서 연결)
+const speedStat = document.getElementById('loveSpeedStat');
+function drawSpeedStat(r){ speedStat.textContent = '현재 ' + (+r.toFixed(2)) + 'x'; }
 const speedCtl = Practice.createSpeed({
   mount: document.getElementById('loveSpeed'),
   storageKey: 'love_speed',
-  getPlayer: () => player
+  getPlayer: () => player,
+  onRate: drawSpeedStat            // 속도 변경 시 상태줄("현재 1x") 동기화
 });
+drawSpeedStat(speedCtl.rate);      // 초기값(저장된 속도) 반영
 const loopCtl = Practice.createLoop({
   mount: document.getElementById('loveLoop'),
   storageKey: 'love_ab',
