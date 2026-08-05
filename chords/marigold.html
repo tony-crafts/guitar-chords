@@ -21,6 +21,8 @@ body{
   padding:10px 10px calc(20px + env(safe-area-inset-bottom));
   max-width:520px; margin:0 auto;
 }
+.back{display:inline-block; font-size:11.5px; color:var(--dim); text-decoration:none; margin-bottom:8px}
+.back:hover{color:var(--gold)}
 header{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; padding:2px 2px 8px}
 header h1{font-size:19px; letter-spacing:.5px; color:var(--gold); font-weight:800}
 header .meta{font-size:11px; color:var(--dim); letter-spacing:.4px}
@@ -189,6 +191,7 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     grid-template-columns:460px minmax(0,1fr);
     column-gap:22px; align-items:start;
   }
+  body[data-view="P"] > .back,
   body[data-view="P"] > header,
   body[data-view="P"] > .tabs{ grid-column:1 / -1; }
   body[data-view="P"] > #viewP.on{ display:block; grid-column:1; }
@@ -199,6 +202,8 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 </style>
 </head>
 <body>
+
+<a class="back" href="/index.html">‹ 목록</a>
 
 <header>
   <h1>Marigold</h1>

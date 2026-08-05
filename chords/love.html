@@ -37,6 +37,25 @@ header .meta{font-size:11.5px; color:var(--dim); letter-spacing:.4px}
 .panel h2{font-size:12px; font-weight:800; color:var(--gold); letter-spacing:.4px}
 .panel .cap{font-size:10.5px; color:var(--dim); margin-top:2px; line-height:1.5}
 footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:0 2px}
+
+/* ============================ 반응형 ============================ */
+/* ~767px(폰): 위 기본 스타일 그대로 (변경 없음) */
+
+/* 768px~(데스크톱/태블릿): 컨테이너 확장 + 영상 크게 + 컨트롤 2컬럼 */
+@media (min-width:768px){
+  body{ max-width:1280px; padding:16px 20px calc(28px + env(safe-area-inset-bottom)); }
+  /* 영상: 16:9 유지, 세로 72vh와 가로(컨테이너 폭) 중 먼저 닿는 쪽에 맞춰 가운데 정렬.
+     width는 min(컨테이너 폭, 72vh를 16:9로 환산한 폭) → aspect-ratio가 높이를 파생 */
+  .pvid{
+    width:min(100%, calc(72vh * 16 / 9));
+    max-height:72vh;
+    margin-left:auto; margin-right:auto;
+    margin-bottom:14px;
+  }
+  /* 속도 · A-B 루프 패널을 한 줄 2컬럼으로 (영상+컨트롤이 한 화면에 들어오도록) */
+  .controls{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  .controls .panel{ margin-bottom:0; }
+}
 </style>
 </head>
 <body>
@@ -50,14 +69,16 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
 
 <div class="pvid"><div id="ytPlayer"></div></div>
 
-<div class="panel">
-  <div id="loveSpeed"></div>
-</div>
+<div class="controls">
+  <div class="panel">
+    <div id="loveSpeed"></div>
+  </div>
 
-<div class="panel">
-  <h2>A-B 구간 루프</h2>
-  <div class="cap">재생 중 [A 설정]·[B 설정]로 구간을 잡고 [루프 ON] — B에 닿으면 A로 되돌아갑니다.</div>
-  <div id="loveLoop"></div>
+  <div class="panel">
+    <h2>A-B 구간 루프</h2>
+    <div class="cap">재생 중 [A 설정]·[B 설정]로 구간을 잡고 [루프 ON] — B에 닿으면 A로 되돌아갑니다.</div>
+    <div id="loveLoop"></div>
+  </div>
 </div>
 
 <footer>차트·마디 싱크 없이 영상 반복 연습용 페이지입니다. 속도·구간 설정은 이 기기에 저장됩니다.</footer>
