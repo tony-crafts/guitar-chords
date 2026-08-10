@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>용의자 — 기타 코드</title>
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="50" y="54" font-size="82" text-anchor="middle" dominant-baseline="central">🎸</text></svg>'>
+</head>
+<body>
+<script src="practice.js"></script>
+<script src="song-core.js"></script>
+<script>
+/* ── 반복 마디 블록(청음 확정 전까지 여기만 고치면 컴팩트/펼침 동시 반영) ── */
+var RIFF = [                                   // 인트로 리프 = 8마디(2줄)
+  ['Gb,F','Bbm,Eb','Ebm,Ab','Db'],
+  ['Gb,F','Bbm,Eb','Gb,Ab','Db']
+];
+var VERSE = ['Db,Ab','Bbm','Gb,Ab','Db,Dbsus4,Db'];   // 4번째 마디 3분할
+var CHOR  = ['Gb,F','Bbm,Eb','Ebm,Ab','Db5'];         // 후렴 4마디 패턴
+
+SongCore.init({
+  title: '용의자',
+  artist: '한로로 (HANRORO)',
+  videoId: 'MBoGQVRkxdQ',
+  key: { original: 'Db', capo: 'C' },
+  bpm: 109,
+  prefix: 'sus',                 // localStorage: sus_bpm / sus_t0 / sus_speed / sus_ab
+  meta: {
+    original: '한로로 (HANRORO) · Key Db · ♩=109 · 카포 X',
+    capo:     '한로로 (HANRORO) · 카포 1프렛 · C형 오픈코드 · 실음 Db · ♩=109'
+  },
+  keyTabs: { original: '원키 · 카포 없음', capo: '카포 1 · C형' },
+  chordList: {
+    original: 'Db · Db5 · Dbsus4 · Ab · Bbm · Bbm7 · Gb · F · Eb · Ebm · Adim7',
+    capo:     'C · C5 · Csus4 · G · Am · Am7 · F · E · D · Dm · Abdim7'
+  },
+  capoMap: {
+    'Db':'C', 'Ab':'G', 'Bbm':'Am', 'Gb':'F', 'F':'E', 'Eb':'D',
+    'Ebm':'Dm', 'Db5':'C5', 'Dbsus4':'Csus4', 'Bbm7':'Am7', 'Adim7':'Abdim7'
+  },
+
+  /* ============ 컴팩트(반복은 ×N 배지) ============ */
+  compact: {
+    flow: '순서: 인트로 리프 → <b>벌스1</b> → <b>후렴1</b> → 벌스2 → 후렴2 → <b>브릿지</b> → 빌드업 → 리프 재현 → <b>후렴3</b> → 아웃트로 → 리프 → 엔딩',
+    blocks: [
+      { name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF },
+      { name:'벌스 1',      color:'verse', meta:'4마디', repeat:'×2', rows:[ VERSE ] },
+      { name:'후렴 1',      color:'cho',   meta:'4마디', repeat:'×2', rows:[ CHOR ] },
+      { name:'벌스 2',      color:'verse', meta:'4마디', repeat:'×2', rows:[ VERSE ], note:'벌스 1과 동일' },
+      { name:'후렴 2',      color:'cho',   meta:'4마디', repeat:'×2', rows:[ CHOR ], note:'후렴 1과 동일' },
+      { name:'브릿지',      color:'brg',   meta:'4마디', rows:[ ['Gb','Db5','Adim7','Bbm7,Eb'] ] },
+      { name:'빌드업',      color:'pre',   meta:'4마디', rows:[ ['Eb','Eb','Ab','Ab'] ] },
+      { name:'리프 재현',   color:'dim',   meta:'8마디', rows: RIFF, note:'인트로 리프와 동일' },
+      { name:'후렴 3',      color:'cho',   meta:'4마디', repeat:'×3', rows:[ CHOR ] },
+      { name:'아웃트로',    color:'qt',    meta:'4마디', rows:[ ['Gb,Ab','Db5','Gb,Ab','Db5'] ] },
+      { name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'인트로 리프와 동일 · 2줄째 끝 Db 여음' },
+      { name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ['Gb,Ab','Db^끝'] ] }
+    ],
+    legend: '한 칸 = 1마디(4박) · 칸 안 점선 분할 = 앞 2박 / 뒤 2박 (3분할은 균등 분할) · ×N = 반복<br> 주법 표기는 추후 추가 예정'
+  },
+
+  /* ============ 펼침(실제 연주 순서, 총 82마디 · 반복 횟수 청음 확정) ============ */
+  expanded: {
+    flow: '위에서 아래로 실제 연주 순서 그대로 (총 82마디) · 반복 횟수는 청음 확정',
+    blocks: [
+      { pass:1,  name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF },
+      { pass:2,  name:'벌스 1',      color:'verse', meta:'8마디', rows:[ VERSE, VERSE ] },
+      { pass:3,  name:'후렴 1',      color:'cho',   meta:'8마디', rows:[ CHOR, CHOR ] },
+      { pass:4,  name:'벌스 2',      color:'verse', meta:'8마디', rows:[ VERSE, VERSE ] },
+      { pass:5,  name:'후렴 2',      color:'cho',   meta:'8마디', rows:[ CHOR, CHOR ] },
+      { pass:6,  name:'브릿지',      color:'brg',   meta:'4마디', rows:[ ['Gb','Db5','Adim7','Bbm7,Eb'] ] },
+      { pass:7,  name:'빌드업',      color:'pre',   meta:'4마디', rows:[ ['Eb','Eb','Ab','Ab'] ] },
+      { pass:8,  name:'리프 재현',   color:'dim',   meta:'8마디', rows: RIFF },
+      { pass:9,  name:'후렴 3',      color:'cho',   meta:'12마디', rows:[ CHOR, CHOR, CHOR ] },
+      { pass:10, name:'아웃트로',    color:'qt',    meta:'4마디', rows:[ ['Gb,Ab','Db5','Gb,Ab','Db5'] ] },
+      { pass:11, name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'2줄째 끝 Db 여음' },
+      { pass:12, name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ['Gb,Ab','Db^끝'] ] }
+    ],
+    legend: '한 칸 = 1마디(4박) · 점선 분할 칸 = 나눠 짚기 (3분할 = 균등)<br> 사용 코드: <b id="chordList">Db · Db5 · Dbsus4 · Ab · Bbm · Bbm7 · Gb · F · Eb · Ebm · Adim7</b>'
+  }
+});
+</script>
+</body>
+</html>
