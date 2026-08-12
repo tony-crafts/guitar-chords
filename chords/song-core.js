@@ -238,6 +238,29 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   /* 오른쪽 차트: 자체 스크롤 컨테이너 (높이는 JS가 뷰포트에 맞춰 지정) */
   body[data-view="P"] > #viewF{ grid-column:2; overflow-y:auto; overscroll-behavior:contain; }
 }
+
+/* 4. 납작한 가로화면(폰 가로): 영상 좌(높이 기준)+컨트롤 우, 헤더 숨김, 전체 폭 */
+@media (max-height:500px) and (orientation:landscape){
+  body{ max-width:none; padding:6px 10px calc(6px + env(safe-area-inset-bottom)); }
+  header{ display:none; }                 /* sticky/세로 점유 최소화 */
+  .tabs{ margin-bottom:5px; }
+  .tabs button{ padding:6px 0; }
+
+  /* 플레이어 탭: 영상 왼쪽(세로 꽉·16:9 유지·비잘림) + 컨트롤 오른쪽 세로 스택,
+     차트(viewF)는 그 아래로 스크롤 → sticky 해제 */
+  body[data-view="P"] .pwrap{
+    position:static; padding-bottom:6px; margin-bottom:6px;
+    display:flex; align-items:flex-start; gap:10px;
+  }
+  body[data-view="P"] .pvid{
+    flex:0 0 auto;
+    width:min(58vw, calc((100dvh - 58px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
+  }
+  body[data-view="P"] .pctrls{
+    flex:1 1 auto; min-width:0;
+    max-height:calc(100dvh - 58px); overflow-y:auto;   /* 우측 컨트롤 자체 스크롤 */
+  }
+}
 `;
 
   function injectCSS(){
@@ -331,35 +354,37 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     return ''
     + '<div class="pwrap">'
     +   '<div class="pvid"><div id="ytPlayer"></div></div>'
-    +   '<div class="pnow">'
-    +     '<div class="prow1" id="prow1">'
-    +       '<span class="pcode now" id="pNow">대기</span>'
-    +       '<span class="parrow">→</span>'
-    +       '<span class="pcode next" id="pNext">—</span>'
+    +   '<div class="pctrls">'
+    +     '<div class="pnow">'
+    +       '<div class="prow1" id="prow1">'
+    +         '<span class="pcode now" id="pNow">대기</span>'
+    +         '<span class="parrow">→</span>'
+    +         '<span class="pcode next" id="pNext">—</span>'
+    +       '</div>'
+    +       '<div class="prow2">'
+    +         '<span class="ptech" id="pNowTech" style="display:none"></span>'
+    +         '<span class="ptech" id="pNextTech" style="display:none"></span>'
+    +       '</div>'
+    +       '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
     +     '</div>'
-    +     '<div class="prow2">'
-    +       '<span class="ptech" id="pNowTech" style="display:none"></span>'
-    +       '<span class="ptech" id="pNextTech" style="display:none"></span>'
+    +     '<div id="pSpeed"></div>'
+    +     '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
+    +     '<div class="pctl">'
+    +       '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
+    +       '<button id="btnNudgeDn">−0.1s</button>'
+    +       '<button id="btnNudgeUp">+0.1s</button>'
     +     '</div>'
-    +     '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
+    +     '<div id="pLoop"></div>'
+    +     '<div class="pctl">'
+    +       '<span class="lb">BPM</span>'
+    +       '<button data-bpm="-0.5">−0.5</button>'
+    +       '<button data-bpm="-0.1">−0.1</button>'
+    +       '<button data-bpm="0.1">+0.1</button>'
+    +       '<button data-bpm="0.5">+0.5</button>'
+    +     '</div>'
+    +     '<div class="phint">뒤로 갈수록 하이라이트가 빨라지면 BPM ↓, 늦어지면 BPM ↑</div>'
+    +     '<div class="pstat" id="pStat">t0=0.00초 · BPM ' + bpm.toFixed(1) + ' · 대기 · 속도 1x</div>'
     +   '</div>'
-    +   '<div id="pSpeed"></div>'
-    +   '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
-    +   '<div class="pctl">'
-    +     '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
-    +     '<button id="btnNudgeDn">−0.1s</button>'
-    +     '<button id="btnNudgeUp">+0.1s</button>'
-    +   '</div>'
-    +   '<div id="pLoop"></div>'
-    +   '<div class="pctl">'
-    +     '<span class="lb">BPM</span>'
-    +     '<button data-bpm="-0.5">−0.5</button>'
-    +     '<button data-bpm="-0.1">−0.1</button>'
-    +     '<button data-bpm="0.1">+0.1</button>'
-    +     '<button data-bpm="0.5">+0.5</button>'
-    +   '</div>'
-    +   '<div class="phint">뒤로 갈수록 하이라이트가 빨라지면 BPM ↓, 늦어지면 BPM ↑</div>'
-    +   '<div class="pstat" id="pStat">t0=0.00초 · BPM ' + bpm.toFixed(1) + ' · 대기 · 속도 1x</div>'
     + '</div>';
   }
 
@@ -576,7 +601,8 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     const loopCtl = Practice.createLoop({
       mount: document.getElementById('pLoop'),
       storageKey: K.ab,
-      getPlayer: function(){ return player; }
+      getPlayer: function(){ return player; },
+      onSeek: function(){ speedCtl.reapply(); }   // 구간 점프 후 속도 유지
     });
 
     function markStart(){

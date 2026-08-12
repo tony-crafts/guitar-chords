@@ -37,6 +37,7 @@ window.Practice = (function(){
     let step = 0.25;                                    // 감지 전 기본(프리셋 가정)
     let detected = false, detecting = false;
     let rate = parseFloat(localStorage.getItem(storageKey)) || 1;
+    let lastSeekAt = 0;                                 // 루프 seek 시각(속도 리셋 판별용)
 
     mount.innerHTML =
       '<div class="pr-row">'
@@ -73,6 +74,27 @@ window.Practice = (function(){
       apply(+grid.toFixed(2), false);
     }
 
+    // 저장된 속도를 강제 재적용(저장값은 유지). 루프 seek 직후 버퍼링 리셋 방어.
+    function reapply(){
+      lastSeekAt = Date.now();
+      const p = getPlayer();
+      if(p && p.setPlaybackRate){ try { p.setPlaybackRate(rate); } catch(e){} }
+    }
+
+    // 유튜브 실제 속도가 설정값과 다르면(리셋 등) 되돌림
+    function enforce(){
+      const p = getPlayer();
+      if(!p || !p.getPlaybackRate || !p.setPlaybackRate) return;
+      let cur; try { cur = p.getPlaybackRate(); } catch(e){ return; }
+      if(Math.abs(cur - rate) > 0.01){ try { p.setPlaybackRate(rate); } catch(e){} }
+    }
+
+    // 재생(PLAYING) 전환 시 방어적 재적용 (seek 후 버퍼링→재생에서 1x 복귀 케이스)
+    function onState(e){
+      if(detecting) return;
+      if(e && e.data === 1) enforce();
+    }
+
     range.addEventListener('input', () => apply(parseFloat(range.value), false));
     dn.addEventListener('click', () => nudge(-1));
     up.addEventListener('click', () => nudge(1));
@@ -81,6 +103,8 @@ window.Practice = (function(){
     function onReady(){
       const p = getPlayer();
       if(!p || !p.setPlaybackRate){ draw(); return; }
+      // 재생상태 이벤트 구독(방어적 속도 재적용용) — events 설정과 별개로 추가
+      if(p.addEventListener){ try { p.addEventListener('onStateChange', onState); } catch(e){} }
       detecting = true;
       const orig = p.getPlaybackRate();
       try { p.setPlaybackRate(0.8); } catch(e){}
@@ -101,17 +125,23 @@ window.Practice = (function(){
     // 유튜브 메뉴에서 속도 변경 시 (양방향 동기화)
     function onPlaybackRateChange(r){
       if(detecting) return;                              // 감지 중 이벤트는 무시
-      apply(r, true);
+      // seek 직후 1초 내 1x로의 변경은 사용자 의도가 아니라 버퍼링 리셋 → 저장값 복원
+      if(Date.now() - lastSeekAt < 1000 && Math.abs(r - 1) < 0.01 && Math.abs(rate - 1) > 0.01){
+        const p = getPlayer();
+        if(p && p.setPlaybackRate){ try { p.setPlaybackRate(rate); } catch(e){} }
+        return;                                          // 저장값 갱신하지 않음
+      }
+      apply(r, true);                                    // 그 외는 사용자 의도로 보고 저장값 갱신
     }
 
     draw();
-    return { onReady, onPlaybackRateChange, get rate(){ return rate; } };
+    return { onReady, onPlaybackRateChange, reapply, get rate(){ return rate; } };
   }
 
   /* ============================ A-B 구간 루프 ============================ */
   function createLoop(opts){
     injectCSS();
-    const { mount, storageKey, getPlayer } = opts;
+    const { mount, storageKey, getPlayer, onSeek } = opts;   // onSeek: 구간 점프 직후 훅(속도 재적용 등)
     let a = null, b = null, on = false, timer = null;
 
     try {
@@ -173,7 +203,10 @@ window.Practice = (function(){
       if(!p || !p.getCurrentTime || !p.getPlayerState) return;
       let st; try { st = p.getPlayerState(); } catch(e){ return; }
       if(st !== 1) return;                                // 1=재생 중일 때만
-      if(p.getCurrentTime() >= b) p.seekTo(a, true);
+      if(p.getCurrentTime() >= b){
+        p.seekTo(a, true);
+        if(onSeek) onSeek();                              // seek 직후 속도 재적용 등
+      }
     }
 
     function onReady(){

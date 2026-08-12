@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>love. — 기타 코드</title>
+<title>Desert Eagle — 기타 코드</title>
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="50" y="54" font-size="82" text-anchor="middle" dominant-baseline="central">🎸</text></svg>'>
 <style>
@@ -87,8 +87,8 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
 <a class="back" href="/index.html">‹ 목록</a>
 
 <header>
-  <h1>love.</h1>
-  <span class="meta">wave to earth · 영상 연습</span>
+  <h1>Desert Eagle</h1>
+  <span class="meta">실리카겔 (Silica Gel) · 영상 연습</span>
 </header>
 
 <div class="pvid"><div id="ytPlayer"></div></div>
@@ -97,14 +97,14 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
   <div class="panel">
     <h2 class="sp-desk">재생 속도</h2>
     <div class="cap sp-desk">슬라이더나 [−]·[+]로 재생 속도를 조절 — 느린 구간을 천천히 반복 연습할 때.</div>
-    <div id="loveSpeed"></div>
-    <div class="pr-stat sp-desk" id="loveSpeedStat">현재 1x</div>
+    <div id="deSpeed"></div>
+    <div class="pr-stat sp-desk" id="deSpeedStat">현재 1x</div>
   </div>
 
   <div class="panel">
     <h2>A-B 구간 루프</h2>
     <div class="cap">재생 중 [A 설정]·[B 설정]로 구간을 잡고 [루프 ON] — B에 닿으면 A로 되돌아갑니다.</div>
-    <div id="loveLoop"></div>
+    <div id="deLoop"></div>
   </div>
 </div>
 
@@ -112,22 +112,22 @@ footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:
 
 <script src="practice.js"></script>
 <script>
-const VIDEO_ID = 'WE_QHvDcgiY';        // love. — wave to earth
+const VIDEO_ID = 'SZvwGzl-tEE';        // Desert Eagle — 실리카겔
 let player = null, ready = false, apiRequested = false;
 
 // 컨트롤은 로드 시 생성(플레이어는 아직 없음 → onReady에서 연결)
-const speedStat = document.getElementById('loveSpeedStat');
+const speedStat = document.getElementById('deSpeedStat');
 function drawSpeedStat(r){ speedStat.textContent = '현재 ' + (+r.toFixed(2)) + 'x'; }
 const speedCtl = Practice.createSpeed({
-  mount: document.getElementById('loveSpeed'),
-  storageKey: 'love_speed',
+  mount: document.getElementById('deSpeed'),
+  storageKey: 'de_speed',
   getPlayer: () => player,
   onRate: drawSpeedStat            // 속도 변경 시 상태줄("현재 1x") 동기화
 });
 drawSpeedStat(speedCtl.rate);      // 초기값(저장된 속도) 반영
 const loopCtl = Practice.createLoop({
-  mount: document.getElementById('loveLoop'),
-  storageKey: 'love_ab',
+  mount: document.getElementById('deLoop'),
+  storageKey: 'de_ab',
   getPlayer: () => player,
   onSeek: () => speedCtl.reapply()   // 구간 점프 후 속도 유지
 });
