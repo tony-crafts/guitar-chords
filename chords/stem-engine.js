@@ -15,7 +15,7 @@
    StemEngine.listTracks(songId) → Promise<[record]>
    StemEngine.clearSong(songId)  → Promise<void>
 
-   ── 재생 경로 두 가지 ───────────────────────────────────────────
+   ── 재생 경로 세 가지 ───────────────────────────────────────────
    'wa' 정속(1배속) — Web Audio.
         가져온 음원을 미리 전부 디코딩해 AudioBuffer로 들고 있다가,
         재생 시 4트랙의 AudioBufferSourceNode를 공통 기준시각
@@ -24,19 +24,27 @@
         디코딩을 끝내 놓기 때문에 첫 재생(콜드 스타트)도 어긋나지 않는다.
         트랙 음량은 GainNode — iOS는 audio.volume 변경을 무시하므로 필수.
 
-   'me' 배속(1배속 아님) — <audio> 폴백.
+   'mix' 배속(1배속 아님) — 믹스다운 + 단일 <audio>.
         AudioBufferSourceNode.playbackRate는 음정이 같이 변해(varispeed)
-        연습에 못 쓴다. 배속 구간만 preservesPitch가 되는 <audio>로 돌리고,
-        아래 드리프트 보정을 건다. 이 경로도 MediaElementSource로 GainNode에
-        물려 iOS에서 음량 조절이 듣게 한다.
+        연습에 못 쓰므로 배속은 preservesPitch가 되는 <audio>로 돌린다.
+        다만 <audio>를 트랙마다 두면 4개가 서로 어긋나고 드리프트 보정까지
+        끼어들어 iOS에서 음이 울렁거렸다. 그래서 배속 진입 시 현재 게인
+        그대로 OfflineAudioContext로 한 트랙으로 렌더해 단일 <audio>로
+        재생한다. 트랙이 하나뿐이라 동기 문제가 정의상 사라진다.
+        게인이 파일에 구워지므로 이 엘리먼트는 AudioContext에 물리지
+        않는다 — 덕분에 화면 잠금으로 컨텍스트가 suspend돼도 영향이 없고
+        iOS 볼륨 제약도 받지 않는다. 음량을 바꾸면 재믹스한다(안내 표시).
 
-   ── 드리프트 보정 ('me' 경로 전용) ─────────────────────────────
-   0번 트랙이 기준. 2초 주기로 나머지 트랙의 currentTime을 검사한다.
-     · 0.05초 이상 어긋남 → 미세 배속(±10% 이내)으로 부드럽게 수렴
-     · 0.5초 이상 어긋남  → seek로 회수(연속 seek 금지 간격 2.5초)
-   재생 중 seek는 그 트랙만 잠깐 멈춰 되레 뒤처지므로(≈0.2초) 작은 차이는
-   배속으로 메운다. 이동(seeking) 중인 트랙에 currentTime을 다시 쓰면 seek가
-   재시작돼 그 트랙만 정지하므로 반드시 건너뛴다.
+   'legacy' Web Audio가 없는 브라우저 — <audio> 4개 + 드리프트 보정.
+        0번 트랙이 기준. 2초 주기로 나머지 트랙의 currentTime을 검사해
+        0.05초 이상이면 미세 배속(±10%)으로 수렴, 0.5초 이상이면 seek로
+        회수한다(연속 seek 금지 간격 2.5초). 이동(seeking) 중인 트랙에
+        currentTime을 다시 쓰면 seek가 재시작돼 그 트랙만 멈추므로 건너뛴다.
+
+   ── 화면 잠금 ───────────────────────────────────────────────────
+   iOS는 잠금 시 AudioContext를 suspended/interrupted로 바꾼다. 재생 버튼
+   제스처에서 running이 아니면 resume을 기다렸다 시작하고, 화면 복귀·인터럽션
+   종료 시에는 소스 노드가 죽었는지 알 수 없으므로 현재 위치에서 재구성한다.
 
    ── 메모리 ──────────────────────────────────────────────────────
    디코딩은 압축을 푸는 것이라 RAM을 크게 먹는다(5분21초 스테레오 48kHz면
@@ -52,7 +60,8 @@ window.StemEngine = (function(){
   const MAX_TRACKS = 4;
 
   const START_LEAD = 0.12;    // 초 — 4트랙 동시 start까지 확보하는 여유
-  const DRIFT_TOL  = 0.05;    // 이하 'me' 경로 전용
+  const REMIX_WAIT = 500;     // 음량 변경 후 재믹스까지 기다리는 시간
+  const DRIFT_TOL  = 0.05;    // 이하 'legacy' 경로 전용
   const HARD_TOL   = 0.5;
   const TRIM_MAX   = 0.10;
   const DRIFT_MS   = 2000;
@@ -253,6 +262,42 @@ window.StemEngine = (function(){
     });
   }
 
+  /* ========================= 믹스다운 → WAV ========================= */
+  // 렌더된 AudioBuffer를 16bit WAV Blob으로. 합산이 풀스케일을 넘으면
+  // 잘리므로(스템을 다 더하면 원곡 마스터 수준이 된다) 피크를 먼저 재고 줄인다.
+  function wavBlob(ab){
+    const ch = ab.numberOfChannels, n = ab.length, sr = ab.sampleRate;
+    const data = [];
+    for(let c = 0; c < ch; c++) data.push(ab.getChannelData(c));
+
+    let peak = 0;
+    for(let c = 0; c < ch; c++){
+      const d = data[c];
+      for(let i = 0; i < n; i++){ const v = d[i] < 0 ? -d[i] : d[i]; if(v > peak) peak = v; }
+    }
+    const scale = (peak > 0.999) ? (0.999 / peak) : 1;
+
+    const bytes = 44 + n * ch * 2;
+    const buf = new ArrayBuffer(bytes), dv = new DataView(buf);
+    const ws = function(o, s){ for(let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, 'RIFF');  dv.setUint32(4, bytes - 8, true);  ws(8, 'WAVEfmt ');
+    dv.setUint32(16, 16, true);       dv.setUint16(20, 1, true);
+    dv.setUint16(22, ch, true);       dv.setUint32(24, sr, true);
+    dv.setUint32(28, sr * ch * 2, true); dv.setUint16(32, ch * 2, true);
+    dv.setUint16(34, 16, true);       ws(36, 'data');  dv.setUint32(40, n * ch * 2, true);
+
+    let off = 44;
+    for(let i = 0; i < n; i++){
+      for(let c = 0; c < ch; c++){
+        let v = data[c][i] * scale;
+        if(v < -1) v = -1; else if(v > 1) v = 1;
+        dv.setInt16(off, v * 32767, true);
+        off += 2;
+      }
+    }
+    return new Blob([buf], { type:'audio/wav' });
+  }
+
   /* ========================= 표시 유틸 ========================= */
   function fmtTime(t){
     if(!isFinite(t) || t < 0) t = 0;
@@ -347,8 +392,12 @@ window.StemEngine = (function(){
     let tracks   = [];        // { rec, buffer, audio, url, gain, meSrc, node, muted, volume, seekAt }
     let ctx      = null;      // 재생용 AudioContext (첫 제스처에서 생성)
     let waOK     = waSupported();
-    let mode     = 'wa';      // 'wa' 정속(Web Audio) | 'me' 배속(<audio> 폴백)
+    let mode     = 'wa';      // 'wa' 정속 | 'mix' 배속(믹스다운) | 'legacy' Web Audio 없음
     let rate     = 1;
+    let mixEl    = null, mixUrl = null, mixSig = '';   // 배속용 믹스다운
+    let preparing= false;     // 믹스 렌더 중
+    let remixId  = null;
+    let lastBuildAt = 0;      // 마지막 소스 재구성 시각(중복 복구 방지)
     let playing  = false, started = false, ended = false;
     let waStartAt= 0, waOffset = 0;      // Web Audio 위치 계산 기준
     let pausedPos= 0;
@@ -414,6 +463,10 @@ window.StemEngine = (function(){
       try { ctx = new AC(); } catch(e){ waOK = false; return null; }
       // iOS 무음 스위치와 무관하게 미디어 채널로 재생 (Safari 16.4+)
       try { if(navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
+      // 인터럽션(전화·잠금)이 끝나 running으로 돌아오면 소스를 다시 세운다
+      ctx.addEventListener('statechange', function(){
+        if(ctx && ctx.state === 'running') recover();
+      });
       tracks.forEach(ensureGain);
       return ctx;
     }
@@ -459,9 +512,10 @@ window.StemEngine = (function(){
       return hasTracks() && (decodeState === 'done' || decodeState === 'fail' || !waOK);
     }
     // 모드는 캐시하지 않고 그때그때 파생시킨다. 디코딩이 끝나기 전에 들어온
-    // setPlaybackRate(1)(속도 컨트롤 초기화) 때문에 'me'로 굳는 것을 막는다.
+    // setPlaybackRate(1)(속도 컨트롤 초기화) 때문에 폴백으로 굳는 것을 막는다.
     function wantMode(){
-      return (Math.abs(rate - 1) < 1e-6 && waOK && decodeState === 'done') ? 'wa' : 'me';
+      if(!waOK || decodeState !== 'done') return 'legacy';
+      return (Math.abs(rate - 1) < 1e-6) ? 'wa' : 'mix';
     }
 
     function waPos(){
@@ -473,12 +527,15 @@ window.StemEngine = (function(){
     function mePos(){ return tracks.length ? tracks[0].audio.currentTime : pausedPos; }
     function currentTime(){
       if(!hasTracks()) return 0;
-      if(!playing) return pausedPos;
-      return (mode === 'wa') ? waPos() : mePos();
+      if(!playing || preparing) return pausedPos;
+      if(mode === 'wa')  return waPos();
+      if(mode === 'mix') return mixEl ? mixEl.currentTime : pausedPos;
+      return mePos();
     }
-    // 유튜브 규약: -1 미시작 / 0 종료 / 1 재생 / 2 일시정지
+    // 유튜브 규약: -1 미시작 / 0 종료 / 1 재생 / 2 일시정지 / 3 버퍼링
     function playerState(){
       if(!hasTracks() || !started) return -1;
+      if(preparing) return 3;                  // 믹스 준비 중 — 루프 폴링이 끼어들지 않게
       if(ended) return 0;
       return playing ? 1 : 2;
     }
@@ -488,9 +545,9 @@ window.StemEngine = (function(){
       lastState = s;
       listeners.slice().forEach(function(fn){ try { fn({ data:s, target:api }); } catch(e){} });
     }
-    // 'me' 경로에서 트랙 간 최대 시각 차 ('wa'는 샘플 동기라 항상 0)
+    // 'legacy' 경로에서 트랙 간 최대 시각 차 ('wa'는 샘플 동기, 'mix'는 단일 트랙)
     function spread(){
-      if(mode !== 'me' || tracks.length < 2) return 0;
+      if(mode !== 'legacy' || tracks.length < 2) return 0;
       let mn = Infinity, mx = -Infinity;
       tracks.forEach(function(tr){
         const c = tr.audio.currentTime;
@@ -526,7 +583,7 @@ window.StemEngine = (function(){
           }
         };
       }
-      waStartAt = when; waOffset = offset;
+      waStartAt = when; waOffset = offset; lastBuildAt = Date.now();
       return true;
     }
     function waStop(){
@@ -538,7 +595,104 @@ window.StemEngine = (function(){
       });
     }
 
-    /* ---- 'me' 경로: <audio> 폴백(배속 전용) ---- */
+    /* ---- 'mix' 경로: 현재 게인 그대로 한 트랙으로 렌더 → 단일 <audio> ---- */
+    function gainSig(){
+      return tracks.map(function(t){ return (t.muted ? 0 : t.volume).toFixed(2); }).join(',');
+    }
+    function renderMix(){
+      const OC = OfflineCtx();
+      const base = tracks[0] && tracks[0].buffer;
+      if(!OC || !base) return Promise.reject(new Error('믹스할 음원이 없습니다'));
+      let len = 0, ch = 1;
+      tracks.forEach(function(tr){
+        if(!tr.buffer) return;
+        if(tr.buffer.length > len) len = tr.buffer.length;
+        if(tr.buffer.numberOfChannels > ch) ch = tr.buffer.numberOfChannels;
+      });
+      const oc = new OC(ch, len, base.sampleRate);
+      tracks.forEach(function(tr){
+        if(!tr.buffer) return;
+        const s = oc.createBufferSource(); s.buffer = tr.buffer;
+        const g = oc.createGain();         g.gain.value = tr.muted ? 0 : tr.volume;
+        s.connect(g); g.connect(oc.destination);
+        s.start(0);
+      });
+      const done = oc.startRendering();
+      const p = (done && done.then) ? done : new Promise(function(res){ oc.oncomplete = function(e){ res(e.renderedBuffer); }; });
+      return p.then(function(rendered){
+        const blob = wavBlob(rendered);     // 렌더 버퍼는 여기서 버려진다(이중 보관 최소화)
+        return blob;
+      });
+    }
+    // 게인 구성이 같으면 이미 만든 믹스를 그대로 쓴다
+    function ensureMix(){
+      const sig = gainSig();
+      if(mixEl && mixSig === sig && mixEl.src) return Promise.resolve(mixEl);
+      preparing = true;
+      msg('배속 재생용 믹스 준비 중… (1~2초)');
+      drawTransport();
+      return renderMix().then(function(blob){
+        if(!mixEl){
+          mixEl = new Audio();
+          mixEl.playsInline = true;
+          mixEl.preload = 'auto';
+          if('preservesPitch' in mixEl) mixEl.preservesPitch = true;
+          mixEl.webkitPreservesPitch = true;
+          mixEl.mozPreservesPitch = true;
+          mixEl.addEventListener('ended', function(){
+            if(mode === 'mix' && playing){
+              playing = false; ended = true; pausedPos = dur;
+              drawTransport(); emitState();
+            }
+          });
+        }
+        // 게인이 파일에 구워져 있으므로 AudioContext에 물리지 않는다.
+        // (컨텍스트가 잠금으로 suspend돼도 이 경로는 영향받지 않는다)
+        const old = mixUrl;
+        mixUrl = URL.createObjectURL(blob);
+        mixEl.src = mixUrl;
+        if(old) URL.revokeObjectURL(old);
+        mixSig = sig;
+        preparing = false;
+        msg('');
+        drawTransport();
+        return mixEl;
+      }).catch(function(err){
+        preparing = false;
+        msg('믹스 준비 실패: ' + (err && err.message ? err.message : err));
+        drawTransport();
+        throw err;
+      });
+    }
+    function mixStart(pos){
+      return ensureMix().then(function(el){
+        el.playbackRate = rate;
+        if(Math.abs(el.currentTime - pos) > 0.05) setTime(el, pos);
+        const p = el.play();
+        if(p && p.catch) p.catch(function(){});
+        drawTransport(); emitState();
+      }).catch(function(){
+        playing = false; drawTransport(); emitState();
+      });
+    }
+    function mixStop(){ if(mixEl){ try { mixEl.pause(); } catch(e){} } }
+    // 음량을 바꾸면 구워진 믹스가 낡는다 → 잠깐 기다렸다 다시 렌더
+    function scheduleRemix(){
+      if(mode !== 'mix') return;              // 정속은 GainNode라 실시간 반영
+      clearTimeout(remixId);
+      remixId = setTimeout(function(){
+        const pos = currentTime(), wasPlaying = playing;
+        pausedPos = pos;              // 준비 중 표시 위치가 0으로 튀지 않게
+        mixStop();
+        ensureMix().then(function(el){
+          el.playbackRate = rate;
+          setTime(el, pos);
+          if(wasPlaying){ const p = el.play(); if(p && p.catch) p.catch(function(){}); }
+        }).catch(function(){});
+      }, REMIX_WAIT);
+    }
+
+    /* ---- 'legacy' 경로: Web Audio가 없는 브라우저용 <audio> 4개 ---- */
     function meWire(){
       const c = resumeCtx();
       tracks.forEach(function(tr){
@@ -571,25 +725,38 @@ window.StemEngine = (function(){
     }
 
     /* ---- 공통 재생 제어 ---- */
-    function play(){
-      if(!hasTracks()) return;
-      resumeCtx();                                  // 제스처 안에서 반드시
-      if(!playable()) return;                        // 디코딩 전이면 대기
-      const pos = ended ? 0 : pausedPos;
-      ended = false;
+    function startAt(pos){
       mode = wantMode();
+      playing = true; started = true;
       if(mode === 'wa'){
-        if(!waStart(pos)){ mode = 'me'; meStart(pos); }
+        if(!waStart(pos)){ mode = 'legacy'; meStart(pos); }
+      } else if(mode === 'mix'){
+        mixStart(pos);
       } else {
         meStart(pos);
       }
-      playing = true; started = true;
       drawTransport(); emitState();
+    }
+    function play(){
+      if(!hasTracks() || !playable()) return;
+      const pos = ended ? 0 : pausedPos;
+      ended = false;
+      const c = ensureCtx();
+      // 화면 잠금 뒤에는 컨텍스트가 suspended/interrupted로 남아 있다.
+      // 제스처 안에서 resume을 걸고, 깨어난 다음에 시작한다.
+      if(c && c.state !== 'running'){
+        preparing = true; drawTransport();
+        const go = function(){ preparing = false; startAt(pos); };
+        let r; try { r = c.resume(); } catch(e){}
+        if(r && r.then) r.then(go, go); else go();
+        return;
+      }
+      startAt(pos);
     }
     function pause(){
       if(!playing){ drawTransport(); return; }
       const pos = currentTime();
-      if(mode === 'wa') waStop(); else meStop();
+      if(mode === 'wa') waStop(); else if(mode === 'mix') mixStop(); else meStop();
       pausedPos = pos; playing = false;
       drawTransport(); emitState();
     }
@@ -602,13 +769,15 @@ window.StemEngine = (function(){
       ended = false;
       if(playing){
         if(mode === 'wa'){ waStop(); waStart(t); }
+        else if(mode === 'mix'){ if(mixEl) setTime(mixEl, t); }
         else {
           tracks.forEach(function(tr){ setTime(tr.audio, t); tr.audio.playbackRate = rate; });
           scheduleResync();
         }
       } else {
         pausedPos = t;
-        if(mode === 'me') tracks.forEach(function(tr){ setTime(tr.audio, t); });
+        if(mode === 'mix' && mixEl) setTime(mixEl, t);
+        else if(mode === 'legacy') tracks.forEach(function(tr){ setTime(tr.audio, t); });
       }
       drawTransport(); emitState();
     }
@@ -622,15 +791,20 @@ window.StemEngine = (function(){
       if(nr === prevRate && want === mode) return;
       const pos = currentTime();
       const wasPlaying = playing;
-      if(wasPlaying){ if(mode === 'wa') waStop(); else meStop(); }
+      if(wasPlaying){
+        if(mode === 'wa') waStop(); else if(mode === 'mix') mixStop(); else meStop();
+      }
       mode = want;
       if(wasPlaying){
-        if(mode === 'wa') waStart(pos); else meStart(pos);
+        pausedPos = pos;              // 믹스 준비 중에도 표시 위치를 유지
+        if(mode === 'wa') waStart(pos);
+        else if(mode === 'mix') mixStart(pos);
+        else meStart(pos);
       } else {
         pausedPos = pos;
-        // 폴백 배선(meWire)은 실제로 배속 재생을 시작할 때만 한다.
-        // 미리 물리면 preload='auto'로 4트랙이 통째로 버퍼링돼 메모리를 낭비한다.
-        if(mode === 'me'){
+        // 배선·믹스는 실제로 그 경로로 재생할 때만 준비한다.
+        if(mode === 'mix' && mixEl){ mixEl.playbackRate = rate; setTime(mixEl, pos); }
+        else if(mode === 'legacy'){
           tracks.forEach(function(tr){ setTime(tr.audio, pos); tr.audio.playbackRate = rate; });
         }
       }
@@ -643,7 +817,7 @@ window.StemEngine = (function(){
       resyncIds = [400, 1000, 1600].map(function(ms){ return setTimeout(correctDrift, ms); });
     }
     function correctDrift(){
-      if(mode !== 'me' || !playing || tracks.length < 2) return;
+      if(mode !== 'legacy' || !playing || tracks.length < 2) return;
       const m = tracks[0].audio;
       if(m.seeking) return;                    // 기준이 이동 중이면 판단을 미룬다
       const ref = m.currentTime;
@@ -700,7 +874,7 @@ window.StemEngine = (function(){
         mb.title = tr.muted ? '음소거 해제' : '음소거';
         mb.addEventListener('click', function(){
           tr.muted = !tr.muted;
-          applyMix(tr); saveMix(); drawTracks();
+          applyMix(tr); saveMix(); drawTracks(); scheduleRemix();
         });
 
         const nm = document.createElement('span');
@@ -716,7 +890,7 @@ window.StemEngine = (function(){
           tr.volume = parseFloat(vol.value);
           applyMix(tr);
         });
-        vol.addEventListener('change', saveMix);
+        vol.addEventListener('change', function(){ saveMix(); scheduleRemix(); });
 
         row.appendChild(mb); row.appendChild(nm); row.appendChild(vol);
         elTracks.appendChild(row);
@@ -738,8 +912,12 @@ window.StemEngine = (function(){
 
     function drawSync(){
       if(!hasTracks() || tracks.length < 2){ elSync.textContent = ''; return; }
+      if(preparing){ elSync.classList.remove('lock'); elSync.textContent = '믹스 준비 중'; return; }
       if(mode === 'wa'){
         elSync.textContent = playing ? '샘플 동기' : '';
+        elSync.classList.toggle('lock', playing);
+      } else if(mode === 'mix'){
+        elSync.textContent = playing ? '단일 믹스' : '';
         elSync.classList.toggle('lock', playing);
       } else {
         elSync.classList.remove('lock');
@@ -760,8 +938,12 @@ window.StemEngine = (function(){
     /* ---- 트랙 붙이기 / 디코딩 ---- */
     function teardown(){
       if(driftId){ clearInterval(driftId); driftId = null; }
+      if(remixId){ clearTimeout(remixId); remixId = null; }
       resyncIds.forEach(clearTimeout); resyncIds = [];
       waStop();
+      if(mixEl){ try { mixEl.pause(); } catch(e){} mixEl.removeAttribute('src'); try { mixEl.load(); } catch(e){} }
+      if(mixUrl){ URL.revokeObjectURL(mixUrl); mixUrl = null; }
+      mixEl = null; mixSig = ''; preparing = false;
       tracks.forEach(function(tr){
         try { tr.audio.pause(); } catch(e){}
         try { if(tr.meSrc) tr.meSrc.disconnect(); } catch(e){}
@@ -779,7 +961,7 @@ window.StemEngine = (function(){
     }
 
     function decodeAll(){
-      if(!waOK){ decodeState = 'fail'; mode = 'me'; drawAll(); return Promise.resolve(); }
+      if(!waOK){ decodeState = 'fail'; mode = 'legacy'; drawAll(); return Promise.resolve(); }
       decodeState = 'decoding';
       const nativeRate = 48000;              // 재생 컨텍스트가 다르면 노드가 리샘플한다
       const plan = decodePlan(dur || 300, tracks.length, nativeRate);
@@ -803,7 +985,7 @@ window.StemEngine = (function(){
         msg('');
         drawAll();
       }).catch(function(err){
-        decodeState = 'fail'; mode = 'me';
+        decodeState = 'fail'; mode = 'legacy';
         msg('음원 디코딩 실패 — <audio> 방식으로 재생합니다: ' + (err && err.message ? err.message : err));
         drawAll();
       });
@@ -899,10 +1081,39 @@ window.StemEngine = (function(){
       });
     });
 
+    /* ---- 화면 잠금 / 인터럽션 복귀 ----
+       잠금 중 컨텍스트가 멈추면 소스 노드가 살아 있는지 알 방법이 없다.
+       (waPos()는 컨텍스트 클럭 기반이라 소리가 끊겨도 값은 흘러간다)
+       그래서 복귀 시 'wa' 경로는 현재 위치에서 무조건 재구성한다. */
+    function recover(){
+      if(!hasTracks() || !playing || preparing) return;
+      // 방금 우리가 시작한 것이라면(예: 재생 버튼의 resume이 statechange를 깨움)
+      // 다시 세울 필요가 없다. 그대로 두면 소리가 한 번 끊긴다.
+      if(Date.now() - lastBuildAt < 800) return;
+      if(mode === 'wa'){
+        const pos = waPos();
+        const c = ensureCtx();
+        waStop();
+        const go = function(){ if(playing) waStart(pos); };
+        if(c && c.state !== 'running'){
+          let r; try { r = c.resume(); } catch(e){}
+          if(r && r.then) r.then(go, go); else go();
+        } else go();
+      } else if(mode === 'mix'){
+        if(mixEl && mixEl.paused){ const p = mixEl.play(); if(p && p.catch) p.catch(function(){}); }
+      } else {
+        tracks.forEach(function(tr){
+          if(tr.audio.paused){ const p = tr.audio.play(); if(p && p.catch) p.catch(function(){}); }
+        });
+      }
+    }
+    function onVisible(){ if(document.visibilityState === 'visible') recover(); }
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+
     /* ---- 트랜스포트 이벤트 ---- */
     elPlay.addEventListener('click', function(){
-      resumeCtx();                 // iOS: 제스처 안에서 컨텍스트를 깨운다
-      msg(''); toggle();
+      msg(''); toggle();           // play() 안에서 제스처를 유지한 채 resume 한다
     });
     elSeek.addEventListener('input', function(){ seeking = true; drawTransport(); });
     elSeek.addEventListener('change', function(){
@@ -912,8 +1123,8 @@ window.StemEngine = (function(){
 
     uiId = setInterval(function(){
       if(!tracks.length) return;
-      // 'me' 경로의 자연 종료 감지('wa'는 node.onended가 처리)
-      if(mode === 'me' && playing && tracks[0].audio.ended){
+      // 'legacy' 경로의 자연 종료 감지('wa'는 node.onended, 'mix'는 ended 이벤트)
+      if(mode === 'legacy' && playing && tracks[0].audio.ended){
         playing = false; ended = true; pausedPos = dur;
       }
       if(playing || seeking) drawTransport();
