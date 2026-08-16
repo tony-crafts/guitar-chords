@@ -1,6 +1,6 @@
 /* stem-engine.js — 로컬 음원(스템) 연습 엔진
-   곡별로 오디오 파일 1~4개를 기기(IndexedDB)에 저장해 두고, 트랙별 <audio>를
-   동기 재생한다. 서버에 음원을 올리지 않으므로 사이트를 공개해도 안전하다.
+   곡별로 오디오 파일 1~4개를 기기(IndexedDB)에 저장해 두고 동기 재생한다.
+   서버에 음원을 올리지 않으므로 사이트를 공개해도 안전하다.
 
    ── 제공 ────────────────────────────────────────────────────────
    StemEngine.create({ mount, songId, mixKey, onReady, onChange })
@@ -15,14 +15,33 @@
    StemEngine.listTracks(songId) → Promise<[record]>
    StemEngine.clearSong(songId)  → Promise<void>
 
-   ── 동기화 ──────────────────────────────────────────────────────
+   ── 재생 경로 두 가지 ───────────────────────────────────────────
+   'wa' 정속(1배속) — Web Audio.
+        가져온 음원을 미리 전부 디코딩해 AudioBuffer로 들고 있다가,
+        재생 시 4트랙의 AudioBufferSourceNode를 공통 기준시각
+        (ctx.currentTime + START_LEAD)에 동시 start 한다. 같은 클럭에서
+        같은 시각에 출발하므로 샘플 단위로 맞고 드리프트 보정이 필요 없다.
+        디코딩을 끝내 놓기 때문에 첫 재생(콜드 스타트)도 어긋나지 않는다.
+        트랙 음량은 GainNode — iOS는 audio.volume 변경을 무시하므로 필수.
+
+   'me' 배속(1배속 아님) — <audio> 폴백.
+        AudioBufferSourceNode.playbackRate는 음정이 같이 변해(varispeed)
+        연습에 못 쓴다. 배속 구간만 preservesPitch가 되는 <audio>로 돌리고,
+        아래 드리프트 보정을 건다. 이 경로도 MediaElementSource로 GainNode에
+        물려 iOS에서 음량 조절이 듣게 한다.
+
+   ── 드리프트 보정 ('me' 경로 전용) ─────────────────────────────
    0번 트랙이 기준. 2초 주기로 나머지 트랙의 currentTime을 검사한다.
      · 0.05초 이상 어긋남 → 미세 배속(±10% 이내)으로 부드럽게 수렴
      · 0.5초 이상 어긋남  → seek로 회수(연속 seek 금지 간격 2.5초)
    재생 중 seek는 그 트랙만 잠깐 멈춰 되레 뒤처지므로(≈0.2초) 작은 차이는
    배속으로 메운다. 이동(seeking) 중인 트랙에 currentTime을 다시 쓰면 seek가
-   재시작돼 그 트랙만 정지하므로 반드시 건너뛴다. 여러 트랙을 함께 맞출 때는
-   기준 트랙까지 포함해 대칭으로 seek해야 한쪽만 앞서지 않는다.
+   재시작돼 그 트랙만 정지하므로 반드시 건너뛴다.
+
+   ── 메모리 ──────────────────────────────────────────────────────
+   디코딩은 압축을 푸는 것이라 RAM을 크게 먹는다(5분21초 스테레오 48kHz면
+   트랙당 118MB, 4트랙 471MB). MEM_BUDGET 안에 들도록 모노 → 낮은
+   샘플레이트 순으로 자동 강등하고, 실제 사용량을 UI에 표시한다.
    ──────────────────────────────────────────────────────────────── */
 window.StemEngine = (function(){
   'use strict';
@@ -31,11 +50,16 @@ window.StemEngine = (function(){
   const DB_VER  = 1;
   const STORE   = 'tracks';
   const MAX_TRACKS = 4;
-  const DRIFT_TOL  = 0.05;    // 초 — 이 이상 어긋나면 보정 시작
-  const HARD_TOL   = 0.5;     // 초 — 이 이상 벌어지면 배속으로 못 메우므로 seek
-  const TRIM_MAX   = 0.10;    // 보정용 배속 가감 한도(±10%)
-  const DRIFT_MS   = 2000;    // 드리프트 검사 주기
-  const SEEK_COOL  = 2500;    // 같은 트랙을 연속 seek하지 않는 최소 간격
+
+  const START_LEAD = 0.12;    // 초 — 4트랙 동시 start까지 확보하는 여유
+  const DRIFT_TOL  = 0.05;    // 이하 'me' 경로 전용
+  const HARD_TOL   = 0.5;
+  const TRIM_MAX   = 0.10;
+  const DRIFT_MS   = 2000;
+  const SEEK_COOL  = 2500;
+
+  const MEM_BUDGET = 220 * 1024 * 1024;   // 디코딩 총량 상한
+  const LOW_RATES  = [32000, 22050];      // 모노로도 안 되면 이 순서로 강등
 
   /* ========================= IndexedDB ========================= */
   let dbp = null;
@@ -143,7 +167,7 @@ window.StemEngine = (function(){
   function baseName(n){
     return String(n || '트랙').replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim() || '트랙';
   }
-  // File → ArrayBuffer (Safari 14 미만 대비 FileReader 폴백)
+  // Blob/File → ArrayBuffer (Safari 14 미만 대비 FileReader 폴백)
   function readBuf(f){
     if(f.arrayBuffer) return f.arrayBuffer();
     return new Promise(function(res, rej){
@@ -183,13 +207,50 @@ window.StemEngine = (function(){
             });
           });
         });
-        return chain.then(function(){
-          // 2) 기존 삭제 + 새 저장을 한 트랜잭션으로 (실패 시 기존 스템 유지)
-          return replaceTracks(songId, recs).then(function(){
-            return { saved: recs.length, skipped: all.length - list.length };
-          });
+        return chain.then(function(){ return recs; });
+      })
+      .then(function(recs){
+        // 2) 기존 삭제 + 새 저장을 한 트랜잭션으로 (실패 시 기존 스템 유지)
+        return replaceTracks(songId, recs).then(function(){
+          return { saved: recs.length, skipped: all.length - list.length };
         });
       });
+  }
+
+  /* ========================= 디코딩 ========================= */
+  function OfflineCtx(){ return window.OfflineAudioContext || window.webkitOfflineAudioContext; }
+  function OnlineCtx(){ return window.AudioContext || window.webkitAudioContext; }
+  function waSupported(){ return !!(OnlineCtx() && OfflineCtx()); }
+
+  // 길이·트랙수로 채널/샘플레이트를 정해 MEM_BUDGET 안에 들어오게 한다
+  function decodePlan(seconds, n, nativeRate){
+    const bytes = function(ch, sr){ return seconds * sr * ch * 4 * n; };
+    if(bytes(2, nativeRate) <= MEM_BUDGET) return { ch:2, rate:nativeRate };
+    if(bytes(1, nativeRate) <= MEM_BUDGET) return { ch:1, rate:nativeRate };
+    for(let i = 0; i < LOW_RATES.length; i++){
+      if(bytes(1, LOW_RATES[i]) <= MEM_BUDGET) return { ch:1, rate:LOW_RATES[i] };
+    }
+    return { ch:1, rate:LOW_RATES[LOW_RATES.length - 1] };
+  }
+
+  // OfflineAudioContext로 디코딩하면 그 컨텍스트의 샘플레이트로 리샘플된다.
+  // (재생용 AudioContext는 사용자 제스처 전에 만들지 않아도 되게 분리)
+  function decodeBlob(blob, targetRate, wantMono){
+    const OC = OfflineCtx();
+    return readBuf(blob).then(function(arr){
+      const oc = new OC(1, Math.max(1, Math.round(targetRate)), targetRate);
+      return new Promise(function(res, rej){
+        const p = oc.decodeAudioData(arr, res, rej);
+        if(p && p.then) p.then(res, rej);
+      }).then(function(ab){
+        if(!wantMono || ab.numberOfChannels < 2) return ab;
+        const out = oc.createBuffer(1, ab.length, ab.sampleRate);
+        const o = out.getChannelData(0);
+        const L = ab.getChannelData(0), R = ab.getChannelData(1);
+        for(let i = 0; i < ab.length; i++) o[i] = (L[i] + R[i]) * 0.5;
+        return out;                                  // 스테레오 버퍼는 여기서 버려진다
+      });
+    });
   }
 
   /* ========================= 표시 유틸 ========================= */
@@ -261,6 +322,7 @@ window.StemEngine = (function(){
   flex:0 0 auto; font-size:10px; color:var(--dim);
   font-family:ui-monospace,'SF Mono',Menlo,monospace;
 }
+.st-sync.lock{color:var(--verse,#7fb4a8)}
 .st-msg{margin-top:7px; font-size:10.5px; color:var(--brg,#e07b5f); line-height:1.5}
 .st-msg.ok{color:var(--verse,#7fb4a8)}
 `;
@@ -282,13 +344,21 @@ window.StemEngine = (function(){
     const onReady = opts.onReady || function(){};
     const onChange= opts.onChange || function(){};
 
-    let tracks   = [];        // { rec, audio, url, muted, volume }
+    let tracks   = [];        // { rec, buffer, audio, url, gain, meSrc, node, muted, volume, seekAt }
+    let ctx      = null;      // 재생용 AudioContext (첫 제스처에서 생성)
+    let waOK     = waSupported();
+    let mode     = 'wa';      // 'wa' 정속(Web Audio) | 'me' 배속(<audio> 폴백)
     let rate     = 1;
-    let started  = false;     // 한 번이라도 재생했는가(getPlayerState -1 판별)
-    let seeking  = false;     // 사용자가 seek 슬라이더를 잡고 있는가
+    let playing  = false, started = false, ended = false;
+    let waStartAt= 0, waOffset = 0;      // Web Audio 위치 계산 기준
+    let pausedPos= 0;
+    let dur      = 0;
+    let decodeState = 'idle'; // idle | decoding | done | fail
+    let decodeInfo  = '';
+    let seeking  = false;
     let listeners= [];
     let driftId  = null, uiId = null;
-    let resyncIds= [];        // seek·배속 변경 직후 조기 재정렬 타이머
+    let resyncIds= [];
     let lastState= -1;
 
     /* ---- 마크업 ---- */
@@ -337,7 +407,29 @@ window.StemEngine = (function(){
       onChange();
     }
 
-    /* ---- 믹스(음소거/볼륨) 저장 ---- */
+    /* ---- 오디오 컨텍스트 (iOS: 반드시 사용자 제스처 안에서 생성·resume) ---- */
+    function ensureCtx(){
+      if(ctx || !waOK) return ctx;
+      const AC = OnlineCtx();
+      try { ctx = new AC(); } catch(e){ waOK = false; return null; }
+      // iOS 무음 스위치와 무관하게 미디어 채널로 재생 (Safari 16.4+)
+      try { if(navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
+      tracks.forEach(ensureGain);
+      return ctx;
+    }
+    function ensureGain(tr){
+      if(!ctx || tr.gain) return;
+      tr.gain = ctx.createGain();
+      tr.gain.connect(ctx.destination);
+      applyMix(tr);
+    }
+    function resumeCtx(){
+      const c = ensureCtx();
+      if(c && c.state === 'suspended'){ try { c.resume(); } catch(e){} }
+      return c;
+    }
+
+    /* ---- 믹스(음소거/볼륨) ---- */
     function loadMix(){
       try { return JSON.parse(localStorage.getItem(mixKey) || '{}') || {}; } catch(e){ return {}; }
     }
@@ -346,27 +438,49 @@ window.StemEngine = (function(){
       tracks.forEach(function(t){ m[t.rec.name] = { m:t.muted, v:t.volume }; });
       try { localStorage.setItem(mixKey, JSON.stringify(m)); } catch(e){}
     }
-    // muted 속성을 켜면 브라우저가 그 트랙의 재생을 정지시켜(자원 절약) 동기가 깨진다.
-    // 음소거는 반드시 볼륨 0으로 구현한다 — 트랙은 계속 돌아가고 소리만 빠진다.
-    function applyMix(t){
-      t.audio.muted  = false;
-      t.audio.volume = t.muted ? 0 : t.volume;
+    // iOS Safari는 audio.volume 대입을 무시한다(스펙상 하드웨어 볼륨만 사용).
+    // 그래서 음량은 GainNode로 건다. Web Audio가 없을 때만 엘리먼트 볼륨 폴백.
+    function applyMix(tr){
+      const g = tr.muted ? 0 : tr.volume;
+      if(tr.gain){ try { tr.gain.gain.value = g; } catch(e){} }
+      if(tr.audio){
+        tr.audio.muted = false;
+        // MediaElementSource로 그래프에 물린 뒤에는 엘리먼트 볼륨이 의미 없다(GainNode 담당).
+        // 아직 안 물렸으면 엘리먼트 볼륨이 유일한 수단이므로 그대로 반영한다.
+        tr.audio.volume = tr.meSrc ? 1 : g;
+      }
     }
 
     /* ---- 상태 ---- */
-    function master(){ return tracks.length ? tracks[0].audio : null; }
     function hasTracks(){ return tracks.length > 0; }
-    function duration(){
-      const m = master();
-      return (m && isFinite(m.duration)) ? m.duration : 0;
+    function duration(){ return dur; }
+    function setTime(a, t){ try { a.currentTime = t; } catch(e){} }
+    function playable(){
+      return hasTracks() && (decodeState === 'done' || decodeState === 'fail' || !waOK);
+    }
+    // 모드는 캐시하지 않고 그때그때 파생시킨다. 디코딩이 끝나기 전에 들어온
+    // setPlaybackRate(1)(속도 컨트롤 초기화) 때문에 'me'로 굳는 것을 막는다.
+    function wantMode(){
+      return (Math.abs(rate - 1) < 1e-6 && waOK && decodeState === 'done') ? 'wa' : 'me';
+    }
+
+    function waPos(){
+      if(!ctx) return pausedPos;
+      const t = waOffset + (ctx.currentTime - waStartAt);
+      if(t < waOffset) return waOffset;                  // 아직 start 예약 시각 전
+      return dur ? Math.min(t, dur) : t;
+    }
+    function mePos(){ return tracks.length ? tracks[0].audio.currentTime : pausedPos; }
+    function currentTime(){
+      if(!hasTracks()) return 0;
+      if(!playing) return pausedPos;
+      return (mode === 'wa') ? waPos() : mePos();
     }
     // 유튜브 규약: -1 미시작 / 0 종료 / 1 재생 / 2 일시정지
     function playerState(){
-      const m = master();
-      if(!m) return -1;
-      if(!started) return -1;
-      if(m.ended) return 0;
-      return m.paused ? 2 : 1;
+      if(!hasTracks() || !started) return -1;
+      if(ended) return 0;
+      return playing ? 1 : 2;
     }
     function emitState(){
       const s = playerState();
@@ -374,12 +488,9 @@ window.StemEngine = (function(){
       lastState = s;
       listeners.slice().forEach(function(fn){ try { fn({ data:s, target:api }); } catch(e){} });
     }
-
-    /* ---- 재생 제어 ---- */
-    function setTime(a, t){ try { a.currentTime = t; } catch(e){} }
-    // 트랙 간 최대 시각 차(동기 상태 표시·정렬 판단용)
+    // 'me' 경로에서 트랙 간 최대 시각 차 ('wa'는 샘플 동기라 항상 0)
     function spread(){
-      if(tracks.length < 2) return 0;
+      if(mode !== 'me' || tracks.length < 2) return 0;
       let mn = Infinity, mx = -Infinity;
       tracks.forEach(function(tr){
         const c = tr.audio.currentTime;
@@ -389,66 +500,151 @@ window.StemEngine = (function(){
       return mx - mn;
     }
 
-    function play(){
-      const m = master();
-      if(!m) return;
-      started = true;
-      // 일시정지 중에는 트랙 간 간격이 그대로 유지된다. 어긋남이 작으면 건드리지 않는다.
-      // (기준만 빼고 seek하면 seek 지연만큼 기준이 앞서 나가 되레 어긋난다)
-      if(spread() > DRIFT_TOL){
-        let mx = 0;
-        tracks.forEach(function(tr){ if(tr.audio.currentTime > mx) mx = tr.audio.currentTime; });
-        const t = mx + 0.02;                 // 기준 트랙까지 함께 앞으로 → 대칭 seek
-        tracks.forEach(function(tr){ setTime(tr.audio, t); });
-      }
-      // 제스처 안에서 전 트랙을 동시에 시작
+    /* ---- 'wa' 경로: 4트랙 동시 start ---- */
+    function waStart(offset){
+      const c = resumeCtx();
+      if(!c) return false;
+      const when = c.currentTime + START_LEAD;    // 전 트랙 공통 기준시각
+      let any = false;
       tracks.forEach(function(tr){
-        tr.audio.playbackRate = rate;
-        const p = tr.audio.play();
-        if(p && p.catch) p.catch(function(err){ msg('재생 실패: ' + (err && err.message ? err.message : err)); });
+        ensureGain(tr);
+        if(!tr.buffer) return;
+        const n = c.createBufferSource();
+        n.buffer = tr.buffer;
+        n.connect(tr.gain);
+        const off = Math.max(0, Math.min(offset, Math.max(0, tr.buffer.duration - 0.01)));
+        try { n.start(when, off); } catch(e){ return; }
+        tr.node = n;
+        any = true;
+      });
+      if(!any) return false;
+      if(tracks[0].node){
+        tracks[0].node.onended = function(){        // 자연 종료(정지 시엔 onended를 떼고 stop)
+          if(mode === 'wa' && playing){
+            playing = false; ended = true; pausedPos = dur;
+            drawTransport(); emitState();
+          }
+        };
+      }
+      waStartAt = when; waOffset = offset;
+      return true;
+    }
+    function waStop(){
+      tracks.forEach(function(tr){
+        if(!tr.node) return;
+        try { tr.node.onended = null; tr.node.stop(); } catch(e){}
+        try { tr.node.disconnect(); } catch(e){}
+        tr.node = null;
+      });
+    }
+
+    /* ---- 'me' 경로: <audio> 폴백(배속 전용) ---- */
+    function meWire(){
+      const c = resumeCtx();
+      tracks.forEach(function(tr){
+        tr.audio.preload = 'auto';
+        if(c && !tr.meSrc && c.createMediaElementSource){
+          ensureGain(tr);
+          try {
+            tr.meSrc = c.createMediaElementSource(tr.audio);
+            tr.meSrc.connect(tr.gain);
+            applyMix(tr);                        // 음량 담당이 게인으로 넘어간다
+          } catch(e){ tr.meSrc = null; }         // 실패하면 엘리먼트 볼륨 유지
+        }
+      });
+    }
+    function meStart(offset){
+      meWire();
+      tracks.forEach(function(tr){
+        const a = tr.audio;
+        a.playbackRate = rate;
+        if(Math.abs(a.currentTime - offset) > 0.03) setTime(a, offset);
+        const p = a.play();
+        if(p && p.catch) p.catch(function(err){
+          msg('재생 실패: ' + (err && err.message ? err.message : err));
+        });
       });
       scheduleResync();
+    }
+    function meStop(){
+      tracks.forEach(function(tr){ try { tr.audio.pause(); } catch(e){} });
+    }
+
+    /* ---- 공통 재생 제어 ---- */
+    function play(){
+      if(!hasTracks()) return;
+      resumeCtx();                                  // 제스처 안에서 반드시
+      if(!playable()) return;                        // 디코딩 전이면 대기
+      const pos = ended ? 0 : pausedPos;
+      ended = false;
+      mode = wantMode();
+      if(mode === 'wa'){
+        if(!waStart(pos)){ mode = 'me'; meStart(pos); }
+      } else {
+        meStart(pos);
+      }
+      playing = true; started = true;
       drawTransport(); emitState();
     }
     function pause(){
-      tracks.forEach(function(tr){ try { tr.audio.pause(); } catch(e){} });
+      if(!playing){ drawTransport(); return; }
+      const pos = currentTime();
+      if(mode === 'wa') waStop(); else meStop();
+      pausedPos = pos; playing = false;
       drawTransport(); emitState();
     }
-    function toggle(){ if(playerState() === 1) pause(); else play(); }
+    function toggle(){ if(playing) pause(); else play(); }
 
     function seekTo(t){
-      const d = duration();
-      if(!tracks.length) return;
+      if(!hasTracks()) return;
+      const d = dur || 0;
       t = Math.max(0, d ? Math.min(d - 0.05, t) : t);
-      tracks.forEach(function(tr){
-        setTime(tr.audio, t);
-        tr.audio.playbackRate = rate;         // 보정용 배속 가감 초기화
-      });
-      // 끝까지 재생돼 멈춘 뒤 되감으면 다시 굴려준다
-      if(started && playerState() === 0){
-        tracks.forEach(function(tr){ const p = tr.audio.play(); if(p && p.catch) p.catch(function(){}); });
+      ended = false;
+      if(playing){
+        if(mode === 'wa'){ waStop(); waStart(t); }
+        else {
+          tracks.forEach(function(tr){ setTime(tr.audio, t); tr.audio.playbackRate = rate; });
+          scheduleResync();
+        }
+      } else {
+        pausedPos = t;
+        if(mode === 'me') tracks.forEach(function(tr){ setTime(tr.audio, t); });
       }
-      scheduleResync();
       drawTransport(); emitState();
     }
 
+    // 1배속이면 Web Audio(샘플 동기), 그 외에는 음정 유지가 되는 <audio>로 전환
     function setRate(r){
-      rate = Math.max(0.25, Math.min(2, r || 1));
-      tracks.forEach(function(tr){ tr.audio.playbackRate = rate; });
-      scheduleResync();
+      const nr = Math.max(0.25, Math.min(2, r || 1));
+      const prevRate = rate;
+      rate = nr;
+      const want = wantMode();
+      if(nr === prevRate && want === mode) return;
+      const pos = currentTime();
+      const wasPlaying = playing;
+      if(wasPlaying){ if(mode === 'wa') waStop(); else meStop(); }
+      mode = want;
+      if(wasPlaying){
+        if(mode === 'wa') waStart(pos); else meStart(pos);
+      } else {
+        pausedPos = pos;
+        // 폴백 배선(meWire)은 실제로 배속 재생을 시작할 때만 한다.
+        // 미리 물리면 preload='auto'로 4트랙이 통째로 버퍼링돼 메모리를 낭비한다.
+        if(mode === 'me'){
+          tracks.forEach(function(tr){ setTime(tr.audio, pos); tr.audio.playbackRate = rate; });
+        }
+      }
+      drawTransport();
     }
 
-    // seek·배속 변경은 트랙마다 반영 시점이 조금씩 달라 0.1초 안팎이 어긋난다.
-    // 2초 주기를 기다리지 않고 곧바로 몇 번 더 보정해 빨리 수렴시킨다.
+    /* ---- 드리프트 보정 ('me' 경로 전용) ---- */
     function scheduleResync(){
       resyncIds.forEach(clearTimeout);
       resyncIds = [400, 1000, 1600].map(function(ms){ return setTimeout(correctDrift, ms); });
     }
-
-    /* ---- 드리프트 보정 (2초 주기, 기준 = 0번 트랙) ---- */
     function correctDrift(){
-      if(playerState() !== 1 || tracks.length < 2) return;
-      const m = master();
+      if(mode !== 'me' || !playing || tracks.length < 2) return;
+      const m = tracks[0].audio;
       if(m.seeking) return;                    // 기준이 이동 중이면 판단을 미룬다
       const ref = m.currentTime;
       const now = Date.now();
@@ -457,7 +653,7 @@ window.StemEngine = (function(){
         // 이동이 끝나기 전에 currentTime을 다시 쓰면 seek가 재시작되어 그 트랙만
         // 계속 멈춰 있게 된다. 이동 중인 트랙은 반드시 건너뛴다.
         if(a.seeking) continue;
-        if(a.paused){                          // 어떤 이유로든 멈춘 트랙은 되살린다
+        if(a.paused){
           if(now - (tr.seekAt || 0) < SEEK_COOL) continue;
           tr.seekAt = now;
           setTime(a, ref);
@@ -465,31 +661,30 @@ window.StemEngine = (function(){
           const p = a.play(); if(p && p.catch) p.catch(function(){});
           continue;
         }
-        const d  = a.currentTime - ref;        // + 앞섬 / − 뒤처짐
+        const d  = a.currentTime - ref;
         const ad = Math.abs(d);
-        if(ad > HARD_TOL){                     // 크게 벌어졌을 때만 seek로 회수
+        if(ad > HARD_TOL){
           if(now - (tr.seekAt || 0) < SEEK_COOL) continue;
           tr.seekAt = now;
           setTime(a, ref);
           a.playbackRate = rate;
-        } else if(ad > DRIFT_TOL){             // 미세 차이: 배속으로 부드럽게 수렴
+        } else if(ad > DRIFT_TOL){
           const trim = Math.max(-TRIM_MAX, Math.min(TRIM_MAX, -d / (DRIFT_MS / 1000)));
           a.playbackRate = rate * (1 + trim);
         } else if(Math.abs(a.playbackRate - rate) > 1e-4){
-          a.playbackRate = rate;               // 정렬 완료 → 설정 배속 복귀
+          a.playbackRate = rate;
         }
       }
     }
 
     /* ---- 그리기 ---- */
     function drawTransport(){
-      const d = duration(), m = master();
-      const t = m ? m.currentTime : 0;
-      elPlay.textContent = (playerState() === 1) ? '❚❚' : '▶';
-      elPlay.disabled = !m;
-      elSeek.disabled = !m || !d;
-      if(d){ elSeek.max = String(d); if(!seeking) elSeek.value = String(Math.min(t, d)); }
-      elTime.textContent = fmtTime(seeking ? parseFloat(elSeek.value) : t) + ' / ' + fmtTime(d);
+      const t = currentTime();
+      elPlay.textContent = playing ? '❚❚' : '▶';
+      elPlay.disabled = !playable();
+      elSeek.disabled = !playable() || !dur;
+      if(dur){ elSeek.max = String(dur); if(!seeking) elSeek.value = String(Math.min(t, dur)); }
+      elTime.textContent = fmtTime(seeking ? parseFloat(elSeek.value) : t) + ' / ' + fmtTime(dur);
     }
 
     function drawTracks(){
@@ -530,7 +725,8 @@ window.StemEngine = (function(){
 
     function drawInfo(){
       const total = tracks.reduce(function(s, t){ return s + (t.rec.size || 0); }, 0);
-      const base  = tracks.length + '트랙 · ' + fmtSize(total);
+      let base = tracks.length + '트랙 · ' + fmtSize(total);
+      if(decodeInfo) base += ' · ' + decodeInfo;
       elInfo.textContent = base;
       storageInfo().then(function(si){
         if(!tracks.length) return;
@@ -540,28 +736,77 @@ window.StemEngine = (function(){
       });
     }
 
+    function drawSync(){
+      if(!hasTracks() || tracks.length < 2){ elSync.textContent = ''; return; }
+      if(mode === 'wa'){
+        elSync.textContent = playing ? '샘플 동기' : '';
+        elSync.classList.toggle('lock', playing);
+      } else {
+        elSync.classList.remove('lock');
+        elSync.textContent = playing ? '동기 ±' + Math.round(spread() * 1000) + 'ms' : '';
+      }
+    }
+
     function drawAll(){
       const has = hasTracks();
       elEmpty.classList.toggle('st-hide', has);
       elMain.classList.toggle('st-hide', !has);
       elPick.textContent = '스템 가져오기';
       if(has){ drawTracks(); drawInfo(); }
-      drawTransport();
+      drawTransport(); drawSync();
       onChange();
     }
 
-    /* ---- 트랙 붙이기 ---- */
+    /* ---- 트랙 붙이기 / 디코딩 ---- */
     function teardown(){
       if(driftId){ clearInterval(driftId); driftId = null; }
       resyncIds.forEach(clearTimeout); resyncIds = [];
+      waStop();
       tracks.forEach(function(tr){
         try { tr.audio.pause(); } catch(e){}
+        try { if(tr.meSrc) tr.meSrc.disconnect(); } catch(e){}
+        try { if(tr.gain) tr.gain.disconnect(); } catch(e){}
         tr.audio.removeAttribute('src');
         try { tr.audio.load(); } catch(e){}
         URL.revokeObjectURL(tr.url);
+        tr.buffer = null;                    // 디코딩 버퍼 해제(수백MB)
       });
       tracks = [];
-      started = false; lastState = -1;
+      playing = false; started = false; ended = false;
+      pausedPos = 0; dur = 0;
+      decodeState = 'idle'; decodeInfo = '';
+      lastState = -1;
+    }
+
+    function decodeAll(){
+      if(!waOK){ decodeState = 'fail'; mode = 'me'; drawAll(); return Promise.resolve(); }
+      decodeState = 'decoding';
+      const nativeRate = 48000;              // 재생 컨텍스트가 다르면 노드가 리샘플한다
+      const plan = decodePlan(dur || 300, tracks.length, nativeRate);
+      let bytes = 0;
+      let chain = Promise.resolve();
+      tracks.forEach(function(tr, i){
+        chain = chain.then(function(){
+          msg('음원 준비 중… (' + (i + 1) + '/' + tracks.length + ') — 첫 재생부터 정확히 맞추기 위해 미리 디코딩합니다');
+          return decodeBlob(tr.rec.blob, plan.rate, plan.ch === 1).then(function(ab){
+            tr.buffer = ab;
+            bytes += ab.length * ab.numberOfChannels * 4;
+            if(i === 0 && isFinite(ab.duration) && ab.duration > 0) dur = ab.duration;
+          });
+        });
+      });
+      return chain.then(function(){
+        decodeState = 'done';
+        decodeInfo = (plan.ch === 1 ? '모노' : '스테레오') + ' '
+                   + Math.round(plan.rate / 1000) + 'kHz · 메모리 ' + fmtSize(bytes);
+        if(!playing) mode = wantMode();      // 디코딩 완료 → 정속이면 Web Audio 경로로
+        msg('');
+        drawAll();
+      }).catch(function(err){
+        decodeState = 'fail'; mode = 'me';
+        msg('음원 디코딩 실패 — <audio> 방식으로 재생합니다: ' + (err && err.message ? err.message : err));
+        drawAll();
+      });
     }
 
     function attach(recs){
@@ -570,33 +815,29 @@ window.StemEngine = (function(){
       tracks = recs.map(function(r){
         const url = URL.createObjectURL(r.blob);
         const a   = new Audio();
-        a.preload = 'auto';
+        a.preload = 'metadata';              // 길이만 먼저. 배속 폴백을 쓸 때 auto로 올린다
         a.playsInline = true;
         a.src = url;
         if('preservesPitch' in a) a.preservesPitch = true;
-        a.webkitPreservesPitch = true;      // 구형 사파리
+        a.webkitPreservesPitch = true;       // 구형 사파리
         a.mozPreservesPitch = true;
         a.muted = false;
         const saved = mix[r.name] || {};
         const tr = {
-          rec: r, audio: a, url: url,
+          rec: r, audio: a, url: url, buffer: null,
+          gain: null, meSrc: null, node: null,
           muted: !!saved.m,
           volume: (typeof saved.v === 'number') ? saved.v : 1
         };
+        ensureGain(tr);
         applyMix(tr);
         return tr;
       });
 
-      const m = master();
-      if(m){
-        m.addEventListener('play',  function(){ started = true; drawTransport(); emitState(); });
-        m.addEventListener('pause', function(){ drawTransport(); emitState(); });
-        m.addEventListener('ended', function(){ pause(); emitState(); });
-        m.addEventListener('loadedmetadata', function(){ drawTransport(); onChange(); });
-        m.addEventListener('error', function(){
-          msg('첫 트랙을 재생할 수 없습니다(코덱 미지원일 수 있음).');
-        });
-      }
+      const m = tracks[0].audio;
+      m.addEventListener('loadedmetadata', function(){
+        if(isFinite(m.duration) && m.duration > 0 && !dur){ dur = m.duration; drawTransport(); onChange(); }
+      });
       tracks.forEach(function(tr){
         tr.audio.addEventListener('error', function(){
           msg('“' + tr.rec.name + '” 트랙을 읽지 못했습니다.');
@@ -606,6 +847,19 @@ window.StemEngine = (function(){
       driftId = setInterval(correctDrift, DRIFT_MS);
       drawAll();
       onReady();
+
+      // 길이를 알아야 디코딩 계획(모노/샘플레이트)을 세울 수 있다
+      const waitDur = new Promise(function(res){
+        if(dur){ res(); return; }
+        let done = false;
+        const fin = function(){ if(!done){ done = true; res(); } };
+        m.addEventListener('loadedmetadata', fin);
+        setTimeout(fin, 4000);                        // 메타데이터가 안 와도 진행
+      });
+      waitDur.then(function(){
+        if(!dur && isFinite(m.duration) && m.duration > 0) dur = m.duration;
+        return decodeAll();
+      });
     }
 
     /* ---- 가져오기 ---- */
@@ -646,7 +900,10 @@ window.StemEngine = (function(){
     });
 
     /* ---- 트랜스포트 이벤트 ---- */
-    elPlay.addEventListener('click', function(){ msg(''); toggle(); });
+    elPlay.addEventListener('click', function(){
+      resumeCtx();                 // iOS: 제스처 안에서 컨텍스트를 깨운다
+      msg(''); toggle();
+    });
     elSeek.addEventListener('input', function(){ seeking = true; drawTransport(); });
     elSeek.addEventListener('change', function(){
       seeking = false;
@@ -655,11 +912,12 @@ window.StemEngine = (function(){
 
     uiId = setInterval(function(){
       if(!tracks.length) return;
-      if(playerState() === 1 || seeking) drawTransport();
-      // 트랙 간 어긋남을 그대로 보여준다(동기 확인용)
-      if(tracks.length > 1 && playerState() === 1){
-        elSync.textContent = '동기 ±' + Math.round(spread() * 1000) + 'ms';
+      // 'me' 경로의 자연 종료 감지('wa'는 node.onended가 처리)
+      if(mode === 'me' && playing && tracks[0].audio.ended){
+        playing = false; ended = true; pausedPos = dur;
       }
+      if(playing || seeking) drawTransport();
+      drawSync();
       emitState();
     }, 250);
 
@@ -675,7 +933,7 @@ window.StemEngine = (function(){
     /* ---- 유튜브 호환 플레이어 인터페이스 ---- */
     const api = {
       /* 조회 */
-      getCurrentTime: function(){ const m = master(); return m ? m.currentTime : 0; },
+      getCurrentTime: currentTime,
       getDuration:    duration,
       getPlayerState: playerState,
       getPlaybackRate:function(){ return rate; },
@@ -696,6 +954,8 @@ window.StemEngine = (function(){
       /* 컨트롤러 */
       hasTracks: hasTracks,
       trackCount: function(){ return tracks.length; },
+      engineMode: function(){ return mode; },
+      decodeStatus: function(){ return decodeState; },
       reload: function(){
         return listTracks(songId).then(function(recs){
           if(recs.length) attach(recs); else { teardown(); drawAll(); }
