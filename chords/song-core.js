@@ -249,32 +249,43 @@ body[data-src="yt"]   .only-stem{display:none}
   body[data-view="P"] > #viewF{ grid-column:2; overflow-y:auto; overscroll-behavior:contain; }
 }
 
-/* 4. 납작한 가로화면(폰 가로): 영상 좌(높이 기준)+컨트롤 우, 헤더 숨김, 전체 폭 */
+/* 4. 납작한 가로화면(폰 가로): 좌(영상+컨트롤) / 우(차트) 2단.
+      예전에는 차트가 pwrap 아래로 흘러서, 자동 스크롤이 차트를 따라가려면
+      window를 움직일 수밖에 없었고 그때 영상이 위로 밀려났다.
+      데스크톱 분할과 같은 구조로 바꿔 차트를 자체 스크롤 컨테이너로 분리한다. */
 @media (max-height:500px) and (orientation:landscape){
   body{ max-width:none; padding:6px 10px calc(6px + env(safe-area-inset-bottom)); }
   header{ display:none; }                 /* sticky/세로 점유 최소화 */
   .tabs{ margin-bottom:5px; }
   .tabs button{ padding:6px 0; }
 
-  /* 플레이어 탭: 영상 왼쪽(세로 꽉·16:9 유지·비잘림) + 컨트롤 오른쪽 세로 스택,
-     차트(viewF)는 그 아래로 스크롤 → sticky 해제 */
+  body[data-view="P"]{
+    display:grid;
+    grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+    column-gap:10px; align-items:start;
+  }
+  body[data-view="P"] > .back,
+  body[data-view="P"] > .tabs{ grid-column:1 / -1; }
+  /* 왼쪽 칸: 영상(또는 스템 패널) + 컨트롤. 넘치면 이 칸만 스크롤 */
+  body[data-view="P"] > #viewP.on{
+    display:block; grid-column:1;
+    overflow-y:auto; overscroll-behavior:contain;
+  }
+  /* 오른쪽 칸: 차트 자체 스크롤 (높이는 JS가 뷰포트에 맞춰 지정) */
+  body[data-view="P"] > #viewF{
+    grid-column:2; overflow-y:auto; overscroll-behavior:contain;
+  }
   body[data-view="P"] .pwrap{
-    position:static; padding-bottom:6px; margin-bottom:6px;
-    display:flex; align-items:flex-start; gap:10px;
+    position:static; padding-bottom:0; margin-bottom:0;
+    display:flex; align-items:flex-start; gap:8px;
   }
   body[data-view="P"] .pvid{
     flex:0 0 auto;
-    width:min(58vw, calc((100dvh - 58px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
+    width:min(56%, calc((100dvh - 70px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
   }
-  /* 스템 패널도 영상 자리를 그대로 물려받는다(좌측 고정 + 자체 스크롤) */
-  body[data-view="P"] #pStem{
-    flex:0 0 auto; width:min(46vw, 400px);
-    max-height:calc(100dvh - 58px); overflow-y:auto;
-  }
-  body[data-view="P"] .pctrls{
-    flex:1 1 auto; min-width:0;
-    max-height:calc(100dvh - 58px); overflow-y:auto;   /* 우측 컨트롤 자체 스크롤 */
-  }
+  /* 스템 패널도 영상 자리를 그대로 물려받는다 */
+  body[data-view="P"] #pStem{ flex:0 0 auto; width:56%; max-height:none; }
+  body[data-view="P"] .pctrls{ flex:1 1 auto; min-width:0; max-height:none; }
 }
 `;
 
@@ -496,7 +507,7 @@ body[data-src="yt"]   .only-stem{display:none}
         if(source === 'stem') ensureStem(); else initPlayer();
         startTick();
       }
-      updateStickyH(); layoutRight();
+      updateStickyH(); layoutChart();
       suppressScrollUntil = Date.now() + 700;
       window.scrollTo(0, 0);
     }
@@ -552,7 +563,7 @@ body[data-src="yt"]   .only-stem{display:none}
             startTick();
             if(source === 'yt') render(-1);
             updateStickyH();
-            layoutRight();
+            layoutChart();
           },
           onPlaybackRateChange: function(e){ speedYT.onPlaybackRateChange(e.data); }
         }
@@ -574,9 +585,9 @@ body[data-src="yt"]   .only-stem{display:none}
         onReady: function(){              // 트랙이 붙어 재생 준비가 끝났을 때
           speedStem.onReady();
           loopStem.onReady();
-          updateStickyH(); layoutRight(); refresh();
+          updateStickyH(); layoutChart(); refresh();
         },
-        onChange: function(){ updateStickyH(); layoutRight(); }
+        onChange: function(){ updateStickyH(); layoutChart(); }
       });
     }
 
@@ -593,7 +604,7 @@ body[data-src="yt"]   .only-stem{display:none}
       rate = (s === 'stem') ? speedStem.rate : speedYT.rate;
       if(s === 'stem') ensureStem(); else initPlayer();
       startTick();
-      updateStickyH(); layoutRight();
+      updateStickyH(); layoutChart();
       // 아직 준비 안 된 소스로 옮겼다면 이전 소스의 마디 위치를 남기지 않는다
       if(srcReady()) refresh(); else render(-1);
     }
@@ -736,38 +747,61 @@ body[data-src="yt"]   .only-stem{display:none}
       document.getElementById('btnScroll').classList.toggle('on', autoScroll);
     }
 
-    /* ---- 데스크톱 분할 + 자동 스크롤 ---- */
-    function desktopSplit(){
-      return body.getAttribute('data-view') === 'P'
-          && window.matchMedia('(min-width:1100px)').matches;
+    /* ---- 분할 레이아웃(데스크톱 / 폰 가로) + 자동 스크롤 ----
+       분할에서는 차트(viewF)가 자체 스크롤 컨테이너다. 자동 스크롤은 그
+       컨테이너의 scrollTop만 건드리고 window는 절대 움직이지 않는다. */
+    const MQ_DESK = '(min-width:1100px)';
+    const MQ_FLAT = '(max-height:500px) and (orientation:landscape)';
+    function playerTab(){ return body.getAttribute('data-view') === 'P'; }
+    function flatLandscape(){ return window.matchMedia(MQ_FLAT).matches; }
+    function splitLayout(){
+      return playerTab() && (window.matchMedia(MQ_DESK).matches || flatLandscape());
     }
-    function layoutRight(){
-      if(desktopSplit()){
-        const top = viewF.getBoundingClientRect().top;
-        viewF.style.height = Math.max(240, Math.round(window.innerHeight - top - 12)) + 'px';
-      } else if(viewF.style.height){
-        viewF.style.height = '';
-      }
-    }
-    function scrollToBar(elx){
-      if(desktopSplit()){
-        const er = elx.getBoundingClientRect(), sr = viewF.getBoundingClientRect();
-        viewF.scrollTop += (er.top - sr.top) - (viewF.clientHeight - elx.offsetHeight) / 2;
+    function layoutChart(){
+      if(splitLayout()){
+        // 문서 기준 위치로 계산한다. 뷰포트 기준(top)만 쓰면 페이지가 스크롤된
+        // 상태에서 높이가 부풀어 컨테이너가 화면 밖으로 넘친다.
+        const topDoc = viewF.getBoundingClientRect().top + window.scrollY;
+        const h = Math.max(160, Math.round(window.innerHeight - topDoc - 12));
+        viewF.style.height = h + 'px';
+        viewP.style.maxHeight = flatLandscape() ? (h + 'px') : '';
       } else {
-        elx.scrollIntoView({ block: 'center' });
+        if(viewF.style.height)    viewF.style.height = '';
+        if(viewP.style.maxHeight) viewP.style.maxHeight = '';
       }
     }
+    // 현재 마디를 화면 중앙으로. scrollIntoView는 조상 스크롤 컨테이너와 window를
+    // 같이 움직여서(가로모드에서 영상이 밀려남) 쓰지 않고 좌표를 직접 계산한다.
+    function scrollToBar(elx){
+      if(splitLayout()){
+        const er = elx.getBoundingClientRect(), br = viewF.getBoundingClientRect();
+        const max = Math.max(0, viewF.scrollHeight - viewF.clientHeight);
+        const top = viewF.scrollTop + (er.top - br.top)
+                  - (viewF.clientHeight - elx.offsetHeight) / 2;
+        viewF.scrollTop = Math.max(0, Math.min(max, Math.round(top)));
+      } else {
+        // 세로(폰)에서는 문서가 움직이는 것이 의도된 동작. 다만 가로 위치는
+        // 건드리지 않도록 좌표를 명시해서 스크롤한다.
+        const er = elx.getBoundingClientRect();
+        const top = window.scrollY + er.top - (window.innerHeight - elx.offsetHeight) / 2;
+        window.scrollTo(window.scrollX, Math.max(0, Math.round(top)));
+      }
+    }
+    // 사용자가 직접 스크롤하면 3초간 자동 스크롤을 멈춘다(차트 컨테이너 포함)
     function onUserScroll(){
       if(Date.now() < suppressScrollUntil) return;
       userScrollUntil = Date.now() + 3000;
     }
     window.addEventListener('scroll', onUserScroll, { passive: true });
     viewF.addEventListener('scroll', onUserScroll, { passive: true });
+    viewP.addEventListener('scroll', onUserScroll, { passive: true });
     function updateStickyH(){
       const w = document.querySelector('.pwrap');
       if(w && w.offsetHeight) document.documentElement.style.setProperty('--stickyH', w.offsetHeight + 'px');
     }
-    window.addEventListener('resize', function(){ updateStickyH(); layoutRight(); }, { passive: true });
+    function relayout(){ updateStickyH(); layoutChart(); }
+    window.addEventListener('resize', relayout, { passive: true });
+    window.addEventListener('orientationchange', function(){ setTimeout(relayout, 120); });
 
     /* ---- 이벤트 바인딩 ---- */
     const srcYT   = document.getElementById('srcYT');
