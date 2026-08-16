@@ -149,6 +149,16 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden;
 }
 .pvid iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
+/* 소스 전환(유튜브 / 스템) — 스템은 로컬 저장 음원 */
+.psrc{display:flex; gap:5px; margin-bottom:6px}
+.psrc button{
+  flex:1; padding:7px 0; border-radius:7px; border:1px solid var(--line);
+  background:var(--panel); color:var(--dim); font-size:11.5px; font-weight:700;
+  letter-spacing:.3px; cursor:pointer;
+}
+.psrc button.on{background:var(--gold); border-color:var(--gold); color:#1a1508}
+body[data-src="stem"] .only-yt{display:none}
+body[data-src="yt"]   .only-stem{display:none}
 .pnow{
   margin-top:6px; padding:8px 12px;
   background:var(--panel); border:1px solid var(--line); border-radius:8px;
@@ -239,27 +249,43 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   body[data-view="P"] > #viewF{ grid-column:2; overflow-y:auto; overscroll-behavior:contain; }
 }
 
-/* 4. 납작한 가로화면(폰 가로): 영상 좌(높이 기준)+컨트롤 우, 헤더 숨김, 전체 폭 */
+/* 4. 납작한 가로화면(폰 가로): 좌(영상+컨트롤) / 우(차트) 2단.
+      예전에는 차트가 pwrap 아래로 흘러서, 자동 스크롤이 차트를 따라가려면
+      window를 움직일 수밖에 없었고 그때 영상이 위로 밀려났다.
+      데스크톱 분할과 같은 구조로 바꿔 차트를 자체 스크롤 컨테이너로 분리한다. */
 @media (max-height:500px) and (orientation:landscape){
   body{ max-width:none; padding:6px 10px calc(6px + env(safe-area-inset-bottom)); }
   header{ display:none; }                 /* sticky/세로 점유 최소화 */
   .tabs{ margin-bottom:5px; }
   .tabs button{ padding:6px 0; }
 
-  /* 플레이어 탭: 영상 왼쪽(세로 꽉·16:9 유지·비잘림) + 컨트롤 오른쪽 세로 스택,
-     차트(viewF)는 그 아래로 스크롤 → sticky 해제 */
+  body[data-view="P"]{
+    display:grid;
+    grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+    column-gap:10px; align-items:start;
+  }
+  body[data-view="P"] > .back,
+  body[data-view="P"] > .tabs{ grid-column:1 / -1; }
+  /* 왼쪽 칸: 영상(또는 스템 패널) + 컨트롤. 넘치면 이 칸만 스크롤 */
+  body[data-view="P"] > #viewP.on{
+    display:block; grid-column:1;
+    overflow-y:auto; overscroll-behavior:contain;
+  }
+  /* 오른쪽 칸: 차트 자체 스크롤 (높이는 JS가 뷰포트에 맞춰 지정) */
+  body[data-view="P"] > #viewF{
+    grid-column:2; overflow-y:auto; overscroll-behavior:contain;
+  }
   body[data-view="P"] .pwrap{
-    position:static; padding-bottom:6px; margin-bottom:6px;
-    display:flex; align-items:flex-start; gap:10px;
+    position:static; padding-bottom:0; margin-bottom:0;
+    display:flex; align-items:flex-start; gap:8px;
   }
   body[data-view="P"] .pvid{
     flex:0 0 auto;
-    width:min(58vw, calc((100dvh - 58px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
+    width:min(56%, calc((100dvh - 70px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
   }
-  body[data-view="P"] .pctrls{
-    flex:1 1 auto; min-width:0;
-    max-height:calc(100dvh - 58px); overflow-y:auto;   /* 우측 컨트롤 자체 스크롤 */
-  }
+  /* 스템 패널도 영상 자리를 그대로 물려받는다 */
+  body[data-view="P"] #pStem{ flex:0 0 auto; width:56%; max-height:none; }
+  body[data-view="P"] .pctrls{ flex:1 1 auto; min-width:0; max-height:none; }
 }
 `;
 
@@ -353,8 +379,13 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   function playerHTML(barCount, bpm){
     return ''
     + '<div class="pwrap">'
-    +   '<div class="pvid"><div id="ytPlayer"></div></div>'
+    +   '<div class="pvid only-yt"><div id="ytPlayer"></div></div>'
+    +   '<div class="only-stem" id="pStem"></div>'
     +   '<div class="pctrls">'
+    +     '<div class="psrc">'
+    +       '<button id="srcYT">유튜브</button>'
+    +       '<button id="srcStem">스템(내 음원)</button>'
+    +     '</div>'
     +     '<div class="pnow">'
     +       '<div class="prow1" id="prow1">'
     +         '<span class="pcode now" id="pNow">대기</span>'
@@ -367,14 +398,16 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     +       '</div>'
     +       '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
     +     '</div>'
-    +     '<div id="pSpeed"></div>'
+    +     '<div class="only-yt"   id="pSpeedYT"></div>'
+    +     '<div class="only-stem" id="pSpeedStem"></div>'
     +     '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
     +     '<div class="pctl">'
     +       '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
     +       '<button id="btnNudgeDn">−0.1s</button>'
     +       '<button id="btnNudgeUp">+0.1s</button>'
     +     '</div>'
-    +     '<div id="pLoop"></div>'
+    +     '<div class="only-yt"   id="pLoopYT"></div>'
+    +     '<div class="only-stem" id="pLoopStem"></div>'
     +     '<div class="pctl">'
     +       '<span class="lb">BPM</span>'
     +       '<button data-bpm="-0.5">−0.5</button>'
@@ -396,7 +429,13 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     const compact  = data.compact  || { blocks: data.sections };
     const expanded = data.expanded || { blocks: data.sections };
     const prefix   = data.prefix || 'song';
-    const K = { bpm: prefix + '_bpm', t0: prefix + '_t0', speed: prefix + '_speed', ab: prefix + '_ab' };
+    // 시간축(t0·A-B·속도)은 소스마다 다르므로 키를 분리한다. BPM은 곡 고유값이라 공용.
+    const K = {
+      bpm:    prefix + '_bpm',
+      t0:     prefix + '_t0',        speed:      prefix + '_speed',      ab:      prefix + '_ab',
+      t0s:    prefix + '_stem_t0',   speedStem:  prefix + '_stem_speed', abStem:  prefix + '_stem_ab',
+      mix:    prefix + '_stem_mix',  src:        prefix + '_src'
+    };
 
     // ── DOM 조립(모두 body 직속 — 데스크톱 분할 그리드 셀렉터 전제) ──
     const back = el('a', 'back');
@@ -432,12 +471,26 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 
     // ── 상태 ──
     const bars = Array.prototype.slice.call(viewF.querySelectorAll('.bar'));
-    let player = null, ready = false, tickId = null, apiRequested = false;
+    let player = null, ytReady = false, tickId = null, apiRequested = false;
+    let stem = null;                                   // 스템 엔진(유튜브 호환 인터페이스)
+    let source = (localStorage.getItem(K.src) === 'stem') ? 'stem' : 'yt';
     let bpm = parseFloat(localStorage.getItem(K.bpm)) || data.bpm;
     let BAR = 240 / bpm;
-    let t0 = parseFloat(localStorage.getItem(K.t0)) || 0;
+    let t0YT   = parseFloat(localStorage.getItem(K.t0))  || 0;
+    let t0Stem = parseFloat(localStorage.getItem(K.t0s)) || 0;
     let curIdx = -1, rate = 1, autoScroll = true;
     let suppressScrollUntil = 0, userScrollUntil = 0;
+
+    /* ---- 소스(유튜브 / 스템) 공통 접근자 ---- */
+    function activePlayer(){ return (source === 'stem') ? stem : player; }
+    function curT0(){ return (source === 'stem') ? t0Stem : t0YT; }
+    function setT0(v){
+      if(source === 'stem'){ t0Stem = v; localStorage.setItem(K.t0s, String(v)); }
+      else                 { t0YT   = v; localStorage.setItem(K.t0,  String(v)); }
+    }
+    function srcReady(){
+      return (source === 'stem') ? !!(stem && stem.hasTracks()) : ytReady;
+    }
 
     const chordListEl = document.getElementById('chordList');   // 펼침 범례에만 존재(선택)
 
@@ -450,8 +503,11 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       tabF.classList.toggle('on', v === 'F');
       tabP.classList.toggle('on', v === 'P');
       body.setAttribute('data-view', v);
-      if(v === 'P') initPlayer();
-      updateStickyH(); layoutRight();
+      if(v === 'P'){
+        if(source === 'stem') ensureStem(); else initPlayer();
+        startTick();
+      }
+      updateStickyH(); layoutChart();
       suppressScrollUntil = Date.now() + 700;
       window.scrollTo(0, 0);
     }
@@ -500,33 +556,82 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
         playerVars: { playsinline: 1, rel: 0 },
         events: {
           onReady: function(){
-            if(ready) return;
-            ready = true;
-            speedCtl.onReady();
-            loopCtl.onReady();
-            if(tickId) clearInterval(tickId);
-            tickId = setInterval(tick, 120);
-            render(-1);
+            if(ytReady) return;
+            ytReady = true;
+            speedYT.onReady();
+            loopYT.onReady();
+            startTick();
+            if(source === 'yt') render(-1);
             updateStickyH();
-            layoutRight();
+            layoutChart();
           },
-          onPlaybackRateChange: function(e){ speedCtl.onPlaybackRateChange(e.data); }
+          onPlaybackRateChange: function(e){ speedYT.onPlaybackRateChange(e.data); }
         }
       });
     }
 
+    /* ---- 스템 엔진 (플레이어 탭에서 스템 소스 선택 시 lazy 생성) ---- */
+    function ensureStem(){
+      if(stem) return;
+      const mountEl = document.getElementById('pStem');
+      if(!window.StemEngine){
+        mountEl.textContent = '스템 엔진(stem-engine.js)을 불러오지 못했습니다.';
+        return;
+      }
+      stem = StemEngine.create({
+        mount:  mountEl,
+        songId: prefix,
+        mixKey: K.mix,
+        onReady: function(){              // 트랙이 붙어 재생 준비가 끝났을 때
+          speedStem.onReady();
+          loopStem.onReady();
+          updateStickyH(); layoutChart(); refresh();
+        },
+        onChange: function(){ updateStickyH(); layoutChart(); }
+      });
+    }
+
+    /* ---- 소스 전환 ---- */
+    function setSource(s){
+      if(s === source) return;
+      const cur = activePlayer();                       // 전환 전 현재 소스는 정지
+      try { if(cur && cur.pauseVideo) cur.pauseVideo(); } catch(e){}
+      source = s;
+      localStorage.setItem(K.src, s);
+      body.setAttribute('data-src', s);
+      srcYT.classList.toggle('on',   s === 'yt');
+      srcStem.classList.toggle('on', s === 'stem');
+      rate = (s === 'stem') ? speedStem.rate : speedYT.rate;
+      if(s === 'stem') ensureStem(); else initPlayer();
+      startTick();
+      updateStickyH(); layoutChart();
+      // 아직 준비 안 된 소스로 옮겼다면 이전 소스의 마디 위치를 남기지 않는다
+      if(srcReady()) refresh(); else render(-1);
+    }
+
     /* ---- 마디 추적 ---- */
+    function startTick(){
+      if(tickId) return;
+      tickId = setInterval(tick, 120);
+    }
     function tick(){
-      if(!ready || typeof player.getCurrentTime !== 'function') return;
+      const p = activePlayer();
+      if(!p || typeof p.getCurrentTime !== 'function') return;
       let st;
-      try { st = player.getPlayerState(); } catch(e){ return; }
-      if(st !== 1 && st !== 2) return;
-      const n = Math.floor((player.getCurrentTime() - t0) / BAR);
+      try { st = p.getPlayerState(); } catch(e){ return; }
+      // 유튜브는 재생/일시정지에서만 추적(버퍼링·큐 상태의 시각은 신뢰도가 낮다)
+      if(source === 'yt' && st !== 1 && st !== 2) return;
+      let ct;
+      try { ct = p.getCurrentTime(); } catch(e){ return; }
+      const n = Math.floor((ct - curT0()) / BAR);
       if(n !== curIdx) render(n);
     }
     function refresh(){
-      if(!ready){ render(curIdx); return; }
-      render(Math.floor((player.getCurrentTime() - t0) / BAR));
+      const p = activePlayer();
+      if(!srcReady() || !p || typeof p.getCurrentTime !== 'function'){ render(curIdx); return; }
+      let ct;
+      try { ct = p.getCurrentTime(); } catch(e){ render(curIdx); return; }
+      render(Math.floor((ct - curT0()) / BAR));
     }
     function render(n){
       const prev = curIdx;
@@ -552,7 +657,8 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
         (elx ? secName(elx) : '—') + ' · ' +
         (n < 0 ? 0 : Math.min(n + 1, bars.length)) + '/' + bars.length + ' 마디';
       document.getElementById('pStat').textContent =
-        't0=' + t0.toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
+        (source === 'stem' ? '스템' : '유튜브') + ' · ' +
+        't0=' + curT0().toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
         (n < 0 ? '대기' : (n >= bars.length ? '끝' : (n + 1) + '/' + bars.length)) +
         ' · 속도 ' + rate + 'x';
     }
@@ -591,29 +697,43 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       return b ? b.textContent.trim() : '—';
     }
 
-    /* ---- 컨트롤(공용 practice.js) ---- */
-    const speedCtl = Practice.createSpeed({
-      mount: document.getElementById('pSpeed'),
+    /* ---- 컨트롤(공용 practice.js) — 소스별로 한 벌씩 ---- */
+    const speedYT = Practice.createSpeed({
+      mount: document.getElementById('pSpeedYT'),
       storageKey: K.speed,
       getPlayer: function(){ return player; },
-      onRate: function(r){ rate = r; render(curIdx); }
+      onRate: function(r){ if(source === 'yt'){ rate = r; render(curIdx); } }
     });
-    const loopCtl = Practice.createLoop({
-      mount: document.getElementById('pLoop'),
+    const loopYT = Practice.createLoop({
+      mount: document.getElementById('pLoopYT'),
       storageKey: K.ab,
       getPlayer: function(){ return player; },
-      onSeek: function(){ speedCtl.reapply(); }   // 구간 점프 후 속도 유지
+      onSeek: function(){ speedYT.reapply(); }   // 구간 점프 후 속도 유지
     });
+    // 로컬 오디오는 임의 배속이 확실 → 지원 감지 생략, 0.5~1.5 / step 0.05
+    const speedStem = Practice.createSpeed({
+      mount: document.getElementById('pSpeedStem'),
+      storageKey: K.speedStem,
+      getPlayer: function(){ return stem; },
+      min: 0.5, max: 1.5, step: 0.05, detect: false,
+      onRate: function(r){ if(source === 'stem'){ rate = r; render(curIdx); } }
+    });
+    const loopStem = Practice.createLoop({
+      mount: document.getElementById('pLoopStem'),
+      storageKey: K.abStem,
+      getPlayer: function(){ return stem; },
+      onSeek: function(){ speedStem.reapply(); }
+    });
+    rate = (source === 'stem') ? speedStem.rate : speedYT.rate;
 
     function markStart(){
-      if(!ready) return;
-      t0 = player.getCurrentTime();
-      localStorage.setItem(K.t0, String(t0));
+      const p = activePlayer();
+      if(!srcReady() || !p) return;
+      setT0(p.getCurrentTime());
       refresh();
     }
     function nudge(d){
-      t0 = Math.max(0, t0 + d);
-      localStorage.setItem(K.t0, String(t0));
+      setT0(Math.max(0, curT0() + d));
       refresh();
     }
     function nudgeBpm(d){
@@ -627,40 +747,70 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       document.getElementById('btnScroll').classList.toggle('on', autoScroll);
     }
 
-    /* ---- 데스크톱 분할 + 자동 스크롤 ---- */
-    function desktopSplit(){
-      return body.getAttribute('data-view') === 'P'
-          && window.matchMedia('(min-width:1100px)').matches;
+    /* ---- 분할 레이아웃(데스크톱 / 폰 가로) + 자동 스크롤 ----
+       분할에서는 차트(viewF)가 자체 스크롤 컨테이너다. 자동 스크롤은 그
+       컨테이너의 scrollTop만 건드리고 window는 절대 움직이지 않는다. */
+    const MQ_DESK = '(min-width:1100px)';
+    const MQ_FLAT = '(max-height:500px) and (orientation:landscape)';
+    function playerTab(){ return body.getAttribute('data-view') === 'P'; }
+    function flatLandscape(){ return window.matchMedia(MQ_FLAT).matches; }
+    function splitLayout(){
+      return playerTab() && (window.matchMedia(MQ_DESK).matches || flatLandscape());
     }
-    function layoutRight(){
-      if(desktopSplit()){
-        const top = viewF.getBoundingClientRect().top;
-        viewF.style.height = Math.max(240, Math.round(window.innerHeight - top - 12)) + 'px';
-      } else if(viewF.style.height){
-        viewF.style.height = '';
-      }
-    }
-    function scrollToBar(elx){
-      if(desktopSplit()){
-        const er = elx.getBoundingClientRect(), sr = viewF.getBoundingClientRect();
-        viewF.scrollTop += (er.top - sr.top) - (viewF.clientHeight - elx.offsetHeight) / 2;
+    function layoutChart(){
+      if(splitLayout()){
+        // 문서 기준 위치로 계산한다. 뷰포트 기준(top)만 쓰면 페이지가 스크롤된
+        // 상태에서 높이가 부풀어 컨테이너가 화면 밖으로 넘친다.
+        const topDoc = viewF.getBoundingClientRect().top + window.scrollY;
+        const h = Math.max(160, Math.round(window.innerHeight - topDoc - 12));
+        viewF.style.height = h + 'px';
+        viewP.style.maxHeight = flatLandscape() ? (h + 'px') : '';
       } else {
-        elx.scrollIntoView({ block: 'center' });
+        if(viewF.style.height)    viewF.style.height = '';
+        if(viewP.style.maxHeight) viewP.style.maxHeight = '';
       }
     }
+    // 현재 마디를 화면 중앙으로. scrollIntoView는 조상 스크롤 컨테이너와 window를
+    // 같이 움직여서(가로모드에서 영상이 밀려남) 쓰지 않고 좌표를 직접 계산한다.
+    function scrollToBar(elx){
+      if(splitLayout()){
+        const er = elx.getBoundingClientRect(), br = viewF.getBoundingClientRect();
+        const max = Math.max(0, viewF.scrollHeight - viewF.clientHeight);
+        const top = viewF.scrollTop + (er.top - br.top)
+                  - (viewF.clientHeight - elx.offsetHeight) / 2;
+        viewF.scrollTop = Math.max(0, Math.min(max, Math.round(top)));
+      } else {
+        // 세로(폰)에서는 문서가 움직이는 것이 의도된 동작. 다만 가로 위치는
+        // 건드리지 않도록 좌표를 명시해서 스크롤한다.
+        const er = elx.getBoundingClientRect();
+        const top = window.scrollY + er.top - (window.innerHeight - elx.offsetHeight) / 2;
+        window.scrollTo(window.scrollX, Math.max(0, Math.round(top)));
+      }
+    }
+    // 사용자가 직접 스크롤하면 3초간 자동 스크롤을 멈춘다(차트 컨테이너 포함)
     function onUserScroll(){
       if(Date.now() < suppressScrollUntil) return;
       userScrollUntil = Date.now() + 3000;
     }
     window.addEventListener('scroll', onUserScroll, { passive: true });
     viewF.addEventListener('scroll', onUserScroll, { passive: true });
+    viewP.addEventListener('scroll', onUserScroll, { passive: true });
     function updateStickyH(){
       const w = document.querySelector('.pwrap');
       if(w && w.offsetHeight) document.documentElement.style.setProperty('--stickyH', w.offsetHeight + 'px');
     }
-    window.addEventListener('resize', function(){ updateStickyH(); layoutRight(); }, { passive: true });
+    function relayout(){ updateStickyH(); layoutChart(); }
+    window.addEventListener('resize', relayout, { passive: true });
+    window.addEventListener('orientationchange', function(){ setTimeout(relayout, 120); });
 
     /* ---- 이벤트 바인딩 ---- */
+    const srcYT   = document.getElementById('srcYT');
+    const srcStem = document.getElementById('srcStem');
+    srcYT.classList.toggle('on',   source === 'yt');
+    srcStem.classList.toggle('on', source === 'stem');
+    srcYT.addEventListener('click',   function(){ setSource('yt'); });
+    srcStem.addEventListener('click', function(){ setSource('stem'); });
+
     tabC.addEventListener('click', function(){ show('C'); });
     tabF.addEventListener('click', function(){ show('F'); });
     tabP.addEventListener('click', function(){ show('P'); });
@@ -676,6 +826,7 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 
     // 초기 진입 뷰(기본 컴팩트) → 태블릿 2단이 처음부터 적용
     body.setAttribute('data-view', 'C');
+    body.setAttribute('data-src', source);
   }
 
   function mkBtn(id, label, cls){
