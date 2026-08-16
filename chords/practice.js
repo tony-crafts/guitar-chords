@@ -30,13 +30,19 @@ window.Practice = (function(){
   const fmtTime = t => (t == null ? '—' : t.toFixed(2) + '초');
 
   /* ============================ 적응형 속도 ============================ */
+  /* opts: mount, storageKey, getPlayer, onRate
+           min/max/step — 슬라이더 범위(기본 0.25~2.0 / step 0.25)
+           detect       — 임의 속도 지원 감지 여부(기본 true. 로컬 오디오처럼
+                          임의 배속이 확실한 소스는 false로 두고 step을 직접 지정) */
   function createSpeed(opts){
     injectCSS();
     const { mount, storageKey, getPlayer, onRate } = opts;
-    const MIN = 0.25, MAX = 2.0;
-    let step = 0.25;                                    // 감지 전 기본(프리셋 가정)
+    const MIN = (opts.min != null) ? opts.min : 0.25;
+    const MAX = (opts.max != null) ? opts.max : 2.0;
+    const useDetect = (opts.detect !== false);
+    let step = (opts.step != null) ? opts.step : 0.25;   // 감지 전 기본(프리셋 가정)
     let detected = false, detecting = false;
-    let rate = parseFloat(localStorage.getItem(storageKey)) || 1;
+    let rate = clamp(parseFloat(localStorage.getItem(storageKey)) || 1, MIN, MAX);
     let lastSeekAt = 0;                                 // 루프 seek 시각(속도 리셋 판별용)
 
     mount.innerHTML =
@@ -105,6 +111,7 @@ window.Practice = (function(){
       if(!p || !p.setPlaybackRate){ draw(); return; }
       // 재생상태 이벤트 구독(방어적 속도 재적용용) — events 설정과 별개로 추가
       if(p.addEventListener){ try { p.addEventListener('onStateChange', onState); } catch(e){} }
+      if(!useDetect){ apply(rate, false); return; }     // 감지 생략(로컬 오디오 등)
       detecting = true;
       const orig = p.getPlaybackRate();
       try { p.setPlaybackRate(0.8); } catch(e){}

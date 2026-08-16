@@ -149,6 +149,16 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden;
 }
 .pvid iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
+/* 소스 전환(유튜브 / 스템) — 스템은 로컬 저장 음원 */
+.psrc{display:flex; gap:5px; margin-bottom:6px}
+.psrc button{
+  flex:1; padding:7px 0; border-radius:7px; border:1px solid var(--line);
+  background:var(--panel); color:var(--dim); font-size:11.5px; font-weight:700;
+  letter-spacing:.3px; cursor:pointer;
+}
+.psrc button.on{background:var(--gold); border-color:var(--gold); color:#1a1508}
+body[data-src="stem"] .only-yt{display:none}
+body[data-src="yt"]   .only-stem{display:none}
 .pnow{
   margin-top:6px; padding:8px 12px;
   background:var(--panel); border:1px solid var(--line); border-radius:8px;
@@ -256,6 +266,11 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     flex:0 0 auto;
     width:min(58vw, calc((100dvh - 58px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
   }
+  /* 스템 패널도 영상 자리를 그대로 물려받는다(좌측 고정 + 자체 스크롤) */
+  body[data-view="P"] #pStem{
+    flex:0 0 auto; width:min(46vw, 400px);
+    max-height:calc(100dvh - 58px); overflow-y:auto;
+  }
   body[data-view="P"] .pctrls{
     flex:1 1 auto; min-width:0;
     max-height:calc(100dvh - 58px); overflow-y:auto;   /* 우측 컨트롤 자체 스크롤 */
@@ -353,8 +368,13 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
   function playerHTML(barCount, bpm){
     return ''
     + '<div class="pwrap">'
-    +   '<div class="pvid"><div id="ytPlayer"></div></div>'
+    +   '<div class="pvid only-yt"><div id="ytPlayer"></div></div>'
+    +   '<div class="only-stem" id="pStem"></div>'
     +   '<div class="pctrls">'
+    +     '<div class="psrc">'
+    +       '<button id="srcYT">유튜브</button>'
+    +       '<button id="srcStem">스템(내 음원)</button>'
+    +     '</div>'
     +     '<div class="pnow">'
     +       '<div class="prow1" id="prow1">'
     +         '<span class="pcode now" id="pNow">대기</span>'
@@ -367,14 +387,16 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     +       '</div>'
     +       '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
     +     '</div>'
-    +     '<div id="pSpeed"></div>'
+    +     '<div class="only-yt"   id="pSpeedYT"></div>'
+    +     '<div class="only-stem" id="pSpeedStem"></div>'
     +     '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
     +     '<div class="pctl">'
     +       '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
     +       '<button id="btnNudgeDn">−0.1s</button>'
     +       '<button id="btnNudgeUp">+0.1s</button>'
     +     '</div>'
-    +     '<div id="pLoop"></div>'
+    +     '<div class="only-yt"   id="pLoopYT"></div>'
+    +     '<div class="only-stem" id="pLoopStem"></div>'
     +     '<div class="pctl">'
     +       '<span class="lb">BPM</span>'
     +       '<button data-bpm="-0.5">−0.5</button>'
@@ -396,7 +418,13 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     const compact  = data.compact  || { blocks: data.sections };
     const expanded = data.expanded || { blocks: data.sections };
     const prefix   = data.prefix || 'song';
-    const K = { bpm: prefix + '_bpm', t0: prefix + '_t0', speed: prefix + '_speed', ab: prefix + '_ab' };
+    // 시간축(t0·A-B·속도)은 소스마다 다르므로 키를 분리한다. BPM은 곡 고유값이라 공용.
+    const K = {
+      bpm:    prefix + '_bpm',
+      t0:     prefix + '_t0',        speed:      prefix + '_speed',      ab:      prefix + '_ab',
+      t0s:    prefix + '_stem_t0',   speedStem:  prefix + '_stem_speed', abStem:  prefix + '_stem_ab',
+      mix:    prefix + '_stem_mix',  src:        prefix + '_src'
+    };
 
     // ── DOM 조립(모두 body 직속 — 데스크톱 분할 그리드 셀렉터 전제) ──
     const back = el('a', 'back');
@@ -432,12 +460,26 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 
     // ── 상태 ──
     const bars = Array.prototype.slice.call(viewF.querySelectorAll('.bar'));
-    let player = null, ready = false, tickId = null, apiRequested = false;
+    let player = null, ytReady = false, tickId = null, apiRequested = false;
+    let stem = null;                                   // 스템 엔진(유튜브 호환 인터페이스)
+    let source = (localStorage.getItem(K.src) === 'stem') ? 'stem' : 'yt';
     let bpm = parseFloat(localStorage.getItem(K.bpm)) || data.bpm;
     let BAR = 240 / bpm;
-    let t0 = parseFloat(localStorage.getItem(K.t0)) || 0;
+    let t0YT   = parseFloat(localStorage.getItem(K.t0))  || 0;
+    let t0Stem = parseFloat(localStorage.getItem(K.t0s)) || 0;
     let curIdx = -1, rate = 1, autoScroll = true;
     let suppressScrollUntil = 0, userScrollUntil = 0;
+
+    /* ---- 소스(유튜브 / 스템) 공통 접근자 ---- */
+    function activePlayer(){ return (source === 'stem') ? stem : player; }
+    function curT0(){ return (source === 'stem') ? t0Stem : t0YT; }
+    function setT0(v){
+      if(source === 'stem'){ t0Stem = v; localStorage.setItem(K.t0s, String(v)); }
+      else                 { t0YT   = v; localStorage.setItem(K.t0,  String(v)); }
+    }
+    function srcReady(){
+      return (source === 'stem') ? !!(stem && stem.hasTracks()) : ytReady;
+    }
 
     const chordListEl = document.getElementById('chordList');   // 펼침 범례에만 존재(선택)
 
@@ -450,7 +492,10 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       tabF.classList.toggle('on', v === 'F');
       tabP.classList.toggle('on', v === 'P');
       body.setAttribute('data-view', v);
-      if(v === 'P') initPlayer();
+      if(v === 'P'){
+        if(source === 'stem') ensureStem(); else initPlayer();
+        startTick();
+      }
       updateStickyH(); layoutRight();
       suppressScrollUntil = Date.now() + 700;
       window.scrollTo(0, 0);
@@ -500,33 +545,82 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
         playerVars: { playsinline: 1, rel: 0 },
         events: {
           onReady: function(){
-            if(ready) return;
-            ready = true;
-            speedCtl.onReady();
-            loopCtl.onReady();
-            if(tickId) clearInterval(tickId);
-            tickId = setInterval(tick, 120);
-            render(-1);
+            if(ytReady) return;
+            ytReady = true;
+            speedYT.onReady();
+            loopYT.onReady();
+            startTick();
+            if(source === 'yt') render(-1);
             updateStickyH();
             layoutRight();
           },
-          onPlaybackRateChange: function(e){ speedCtl.onPlaybackRateChange(e.data); }
+          onPlaybackRateChange: function(e){ speedYT.onPlaybackRateChange(e.data); }
         }
       });
     }
 
+    /* ---- 스템 엔진 (플레이어 탭에서 스템 소스 선택 시 lazy 생성) ---- */
+    function ensureStem(){
+      if(stem) return;
+      const mountEl = document.getElementById('pStem');
+      if(!window.StemEngine){
+        mountEl.textContent = '스템 엔진(stem-engine.js)을 불러오지 못했습니다.';
+        return;
+      }
+      stem = StemEngine.create({
+        mount:  mountEl,
+        songId: prefix,
+        mixKey: K.mix,
+        onReady: function(){              // 트랙이 붙어 재생 준비가 끝났을 때
+          speedStem.onReady();
+          loopStem.onReady();
+          updateStickyH(); layoutRight(); refresh();
+        },
+        onChange: function(){ updateStickyH(); layoutRight(); }
+      });
+    }
+
+    /* ---- 소스 전환 ---- */
+    function setSource(s){
+      if(s === source) return;
+      const cur = activePlayer();                       // 전환 전 현재 소스는 정지
+      try { if(cur && cur.pauseVideo) cur.pauseVideo(); } catch(e){}
+      source = s;
+      localStorage.setItem(K.src, s);
+      body.setAttribute('data-src', s);
+      srcYT.classList.toggle('on',   s === 'yt');
+      srcStem.classList.toggle('on', s === 'stem');
+      rate = (s === 'stem') ? speedStem.rate : speedYT.rate;
+      if(s === 'stem') ensureStem(); else initPlayer();
+      startTick();
+      updateStickyH(); layoutRight();
+      // 아직 준비 안 된 소스로 옮겼다면 이전 소스의 마디 위치를 남기지 않는다
+      if(srcReady()) refresh(); else render(-1);
+    }
+
     /* ---- 마디 추적 ---- */
+    function startTick(){
+      if(tickId) return;
+      tickId = setInterval(tick, 120);
+    }
     function tick(){
-      if(!ready || typeof player.getCurrentTime !== 'function') return;
+      const p = activePlayer();
+      if(!p || typeof p.getCurrentTime !== 'function') return;
       let st;
-      try { st = player.getPlayerState(); } catch(e){ return; }
-      if(st !== 1 && st !== 2) return;
-      const n = Math.floor((player.getCurrentTime() - t0) / BAR);
+      try { st = p.getPlayerState(); } catch(e){ return; }
+      // 유튜브는 재생/일시정지에서만 추적(버퍼링·큐 상태의 시각은 신뢰도가 낮다)
+      if(source === 'yt' && st !== 1 && st !== 2) return;
+      let ct;
+      try { ct = p.getCurrentTime(); } catch(e){ return; }
+      const n = Math.floor((ct - curT0()) / BAR);
       if(n !== curIdx) render(n);
     }
     function refresh(){
-      if(!ready){ render(curIdx); return; }
-      render(Math.floor((player.getCurrentTime() - t0) / BAR));
+      const p = activePlayer();
+      if(!srcReady() || !p || typeof p.getCurrentTime !== 'function'){ render(curIdx); return; }
+      let ct;
+      try { ct = p.getCurrentTime(); } catch(e){ render(curIdx); return; }
+      render(Math.floor((ct - curT0()) / BAR));
     }
     function render(n){
       const prev = curIdx;
@@ -552,7 +646,8 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
         (elx ? secName(elx) : '—') + ' · ' +
         (n < 0 ? 0 : Math.min(n + 1, bars.length)) + '/' + bars.length + ' 마디';
       document.getElementById('pStat').textContent =
-        't0=' + t0.toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
+        (source === 'stem' ? '스템' : '유튜브') + ' · ' +
+        't0=' + curT0().toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
         (n < 0 ? '대기' : (n >= bars.length ? '끝' : (n + 1) + '/' + bars.length)) +
         ' · 속도 ' + rate + 'x';
     }
@@ -591,29 +686,43 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
       return b ? b.textContent.trim() : '—';
     }
 
-    /* ---- 컨트롤(공용 practice.js) ---- */
-    const speedCtl = Practice.createSpeed({
-      mount: document.getElementById('pSpeed'),
+    /* ---- 컨트롤(공용 practice.js) — 소스별로 한 벌씩 ---- */
+    const speedYT = Practice.createSpeed({
+      mount: document.getElementById('pSpeedYT'),
       storageKey: K.speed,
       getPlayer: function(){ return player; },
-      onRate: function(r){ rate = r; render(curIdx); }
+      onRate: function(r){ if(source === 'yt'){ rate = r; render(curIdx); } }
     });
-    const loopCtl = Practice.createLoop({
-      mount: document.getElementById('pLoop'),
+    const loopYT = Practice.createLoop({
+      mount: document.getElementById('pLoopYT'),
       storageKey: K.ab,
       getPlayer: function(){ return player; },
-      onSeek: function(){ speedCtl.reapply(); }   // 구간 점프 후 속도 유지
+      onSeek: function(){ speedYT.reapply(); }   // 구간 점프 후 속도 유지
     });
+    // 로컬 오디오는 임의 배속이 확실 → 지원 감지 생략, 0.5~1.5 / step 0.05
+    const speedStem = Practice.createSpeed({
+      mount: document.getElementById('pSpeedStem'),
+      storageKey: K.speedStem,
+      getPlayer: function(){ return stem; },
+      min: 0.5, max: 1.5, step: 0.05, detect: false,
+      onRate: function(r){ if(source === 'stem'){ rate = r; render(curIdx); } }
+    });
+    const loopStem = Practice.createLoop({
+      mount: document.getElementById('pLoopStem'),
+      storageKey: K.abStem,
+      getPlayer: function(){ return stem; },
+      onSeek: function(){ speedStem.reapply(); }
+    });
+    rate = (source === 'stem') ? speedStem.rate : speedYT.rate;
 
     function markStart(){
-      if(!ready) return;
-      t0 = player.getCurrentTime();
-      localStorage.setItem(K.t0, String(t0));
+      const p = activePlayer();
+      if(!srcReady() || !p) return;
+      setT0(p.getCurrentTime());
       refresh();
     }
     function nudge(d){
-      t0 = Math.max(0, t0 + d);
-      localStorage.setItem(K.t0, String(t0));
+      setT0(Math.max(0, curT0() + d));
       refresh();
     }
     function nudgeBpm(d){
@@ -661,6 +770,13 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
     window.addEventListener('resize', function(){ updateStickyH(); layoutRight(); }, { passive: true });
 
     /* ---- 이벤트 바인딩 ---- */
+    const srcYT   = document.getElementById('srcYT');
+    const srcStem = document.getElementById('srcStem');
+    srcYT.classList.toggle('on',   source === 'yt');
+    srcStem.classList.toggle('on', source === 'stem');
+    srcYT.addEventListener('click',   function(){ setSource('yt'); });
+    srcStem.addEventListener('click', function(){ setSource('stem'); });
+
     tabC.addEventListener('click', function(){ show('C'); });
     tabF.addEventListener('click', function(){ show('F'); });
     tabP.addEventListener('click', function(){ show('P'); });
@@ -676,6 +792,7 @@ footer{margin-top:12px; font-size:10px; color:#6b6250; line-height:1.6}
 
     // 초기 진입 뷰(기본 컴팩트) → 태블릿 2단이 처음부터 적용
     body.setAttribute('data-view', 'C');
+    body.setAttribute('data-src', source);
   }
 
   function mkBtn(id, label, cls){
