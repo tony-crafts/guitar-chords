@@ -174,6 +174,9 @@ body[data-src="yt"]   .only-stem{display:none}
 .prow1.sz-sm{ font-size:17px; }
 .prow1 .pcode{ white-space:nowrap; }
 .prow1 .now{ color:var(--gold); justify-self:start; }
+/* 분할 마디에서 지금 연주 중인 쪽 코드만 또렷하게 (활성 정보가 있을 때만) */
+.prow1 .now.hasact .sub, .prow1 .now.hasact .sep{ opacity:.4; }
+.prow1 .now.hasact .sub.act{ opacity:1; }
 .prow1 .next{ color:var(--text); opacity:.5; justify-self:end; text-align:right; }
 .prow1 .parrow{ color:var(--dim); font-weight:700; font-size:.68em; justify-self:center; }
 /* 2행: 주법 배지. 각 코드 아래 정렬. 배지 없으면 8비트(칩 미표시) */
@@ -206,6 +209,15 @@ body[data-src="yt"]   .only-stem{display:none}
 .pbeats .pbdiv{
   position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px;
   background:var(--text); opacity:.8; border-radius:1px; pointer-events:none;
+  z-index:2;
+}
+/* 현재 코드가 차지하는 구간(반반=1/2, 3분할=1/3)을 옅게 강조.
+   칸(박)·경계선은 그대로 두고 위에 얹기만 한다 — 단일 마디에서는 표시 안 함 */
+.pbeats .pseg{
+  position:absolute; top:-2px; bottom:-2px;
+  background:rgba(240,168,58,.13);
+  border:1px solid rgba(240,168,58,.45);
+  border-radius:4px; pointer-events:none; z-index:1;
 }
 /* 4행: 메타 */
 .pmeta{
@@ -505,6 +517,7 @@ body[data-src="yt"]   .only-stem{display:none}
     let curIdx = -1, rate = 1, autoScroll = true;
     let suppressScrollUntil = 0, userScrollUntil = 0;
     let metro = null;                                  // 메트로놈(metronome.js 있을 때)
+    let segKey = '';                                   // 박 블록 코드 구간 표시 캐시 키
     const wake = Practice.wakeLock();                  // 재생 중 화면 꺼짐 방지
 
     /* ---- 소스(유튜브 / 스템) 공통 접근자 ---- */
@@ -679,7 +692,7 @@ body[data-src="yt"]   .only-stem{display:none}
       const nx = (n + 1 >= 0 && n + 1 < bars.length) ? bars[n + 1] : null;
       const nowCode  = (n < 0) ? '대기' : (elx ? barText(elx) : '—');
       const nextCode = nx ? barText(nx) : '—';
-      document.getElementById('pNow').textContent  = nowCode;
+      setNowContent(elx, nowCode);
       document.getElementById('pNext').textContent = nextCode;
       setTech('pNowTech',  elx ? barTech(elx) : '');
       setTech('pNextTech', nx ? barTech(nx) : '');
@@ -692,6 +705,29 @@ body[data-src="yt"]   .only-stem{display:none}
         't0=' + curT0().toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
         (n < 0 ? '대기' : (n >= bars.length ? '끝' : (n + 1) + '/' + bars.length)) +
         ' · 속도 ' + rate + 'x';
+    }
+
+    // NOW 표시: 분할 마디는 조각별 span으로 그려 현재 조각만 강조할 수 있게 한다.
+    // 텍스트는 barText()와 동일("G·D/F#") — 폰트 크기 계산도 그 문자열 기준 그대로.
+    function setNowContent(elx, nowCode){
+      const pn = document.getElementById('pNow');
+      if(elx && elx.classList.contains('split')){
+        pn.textContent = '';
+        elx.querySelectorAll('i').forEach(function(piece, i){
+          if(i){
+            const sep = document.createElement('span');
+            sep.className = 'sep'; sep.textContent = '·';
+            pn.appendChild(sep);
+          }
+          const sp = document.createElement('span');
+          sp.className = 'sub'; sp.textContent = piece.textContent.trim();
+          pn.appendChild(sp);
+        });
+      } else {
+        pn.textContent = nowCode;
+      }
+      pn.classList.remove('hasact');
+      segKey = '';                       // 내용이 새로 그려졌으니 구간 표시 다시 적용
     }
 
     function barText(elx){
@@ -734,6 +770,9 @@ body[data-src="yt"]   .only-stem{display:none}
        마디 갱신(120ms 폴링)보다 촘촘해야 해서 rAF로 따로 돈다. */
     const beatsEl   = document.getElementById('pBeats');
     const beatCells = Array.prototype.slice.call(beatsEl.querySelectorAll('.pb'));
+    const segEl     = el('b', 'pseg');           // 현재 코드 구간 오버레이
+    segEl.style.display = 'none';
+    beatsEl.appendChild(segEl);
     let beatRaf = null, lastBeat = -2, lastDivKind = -1;
 
     // 추적 가능한 상태의 현재 미디어 시각(아니면 null)
@@ -768,12 +807,38 @@ body[data-src="yt"]   .only-stem{display:none}
         beatsEl.appendChild(d);
       }
     }
+    // 현재 코드 구간 강조: 오버레이(칸 위)와 NOW 텍스트의 활성 조각을 함께 갱신
+    function setSeg(segCount, seg){
+      const key = curIdx + '/' + segCount + '/' + seg;
+      if(key === segKey) return;
+      segKey = key;
+      if(segCount > 1 && seg >= 0){
+        segEl.style.display = '';
+        segEl.style.left  = (100 * seg / segCount) + '%';
+        segEl.style.width = (100 / segCount) + '%';
+      } else {
+        segEl.style.display = 'none';
+      }
+      const pn   = document.getElementById('pNow');
+      const subs = pn.querySelectorAll('.sub');
+      if(segCount > 1 && seg >= 0 && subs.length === segCount){
+        pn.classList.add('hasact');
+        subs.forEach(function(sp, i){ sp.classList.toggle('act', i === seg); });
+      } else {
+        pn.classList.remove('hasact');
+        subs.forEach(function(sp){ sp.classList.remove('act'); });
+      }
+    }
     function updateBeats(){
       const t = mediaNow();
-      if(t == null || curIdx < 0 || curIdx >= bars.length){ setBeat(-1); return; }
+      if(t == null || curIdx < 0 || curIdx >= bars.length){ setBeat(-1); setSeg(1, -1); return; }
       const pos = (t - curT0()) / BAR;                 // 마디 단위 위치
       const f   = pos - Math.floor(pos);               // 마디 내 경과 비율
       setBeat(Math.max(0, Math.min(3, Math.floor(f * 4))));
+      const b = bars[curIdx];
+      const segCount = b.classList.contains('split3') ? 3
+                     : b.classList.contains('split')  ? 2 : 1;
+      setSeg(segCount, Math.max(0, Math.min(segCount - 1, Math.floor(f * segCount))));
     }
     function beatLoop(){
       beatRaf = null;
