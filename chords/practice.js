@@ -226,5 +226,51 @@ window.Practice = (function(){
     return { onReady, get state(){ return { a, b, on }; } };
   }
 
-  return { createSpeed, createLoop };
+  /* ====================== 화면 꺼짐 방지(Wake Lock) ======================
+     Screen Wake Lock API — 재생 중 화면이 꺼지지 않게 한다.
+     · 미지원 브라우저(iOS 16.3 이하 등)는 조용히 무시
+     · 탭이 백그라운드로 가면 브라우저가 자동 해제하므로 복귀 시 재획득
+     · 페이지당 하나만 쓰면 되므로 wakeLock()은 싱글턴을 돌려준다 */
+  function createWakeLock(){
+    const supported = !!(navigator.wakeLock && typeof navigator.wakeLock.request === 'function');
+    let sentinel = null, want = false, pending = false;
+
+    function acquire(){
+      want = true;
+      if(!supported || sentinel || pending) return;
+      if(document.visibilityState !== 'visible') return;   // 숨김 상태에서는 요청이 거부된다
+      pending = true;
+      let req;
+      try { req = navigator.wakeLock.request('screen'); } catch(e){ pending = false; return; }
+      req.then(function(s){
+        pending = false;
+        if(!want){ try { s.release(); } catch(e){} return; }   // 그 사이 정지했으면 즉시 반납
+        sentinel = s;
+        s.addEventListener('release', function(){ if(sentinel === s) sentinel = null; });
+      }, function(){ pending = false; });   // 정책·제스처 부족 등 실패는 무시(연습에 지장 없음)
+    }
+    function release(){
+      want = false;
+      const s = sentinel;
+      sentinel = null;
+      if(s){ try { s.release(); } catch(e){} }
+    }
+    // 재생 중 백그라운드 → 복귀: 자동 해제된 잠금을 다시 잡는다
+    document.addEventListener('visibilitychange', function(){
+      if(want && document.visibilityState === 'visible') acquire();
+    });
+
+    return {
+      acquire: acquire,
+      release: release,
+      // 재생 상태를 그대로 넘겨 쓰는 편의 함수(폴링에서 매번 불러도 안전)
+      set: function(on){ if(on) acquire(); else if(want) release(); },
+      get active(){ return !!sentinel; },
+      supported: supported
+    };
+  }
+  let sharedWake = null;
+  function wakeLock(){ return sharedWake || (sharedWake = createWakeLock()); }
+
+  return { createSpeed, createLoop, wakeLock };
 })();

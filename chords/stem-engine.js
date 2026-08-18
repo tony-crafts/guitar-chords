@@ -1162,6 +1162,14 @@ window.StemEngine = (function(){
         const i = listeners.indexOf(fn);
         if(i >= 0) listeners.splice(i, 1);
       },
+      /* 오디오 클럭 — 메트로놈이 클릭을 샘플 정밀로 예약할 때 쓴다 */
+      getAudioContext: function(){ return ctx; },
+      // 미디어 시각 → AudioContext 시각. 정속('wa') 재생 중에만 성립한다.
+      // (배속 믹스다운은 <audio> 재생이라 컨텍스트 클럭과 묶여 있지 않다)
+      mediaToCtxTime: function(t){
+        if(!ctx || mode !== 'wa' || !playing) return null;
+        return waStartAt + (t - waOffset);
+      },
       /* 컨트롤러 */
       hasTracks: hasTracks,
       trackCount: function(){ return tracks.length; },
