@@ -247,6 +247,17 @@ body[data-src="yt"]   .only-stem{display:none}
 .bar.split.now i:first-child{border-right-color:#8a6d18}
 .bar.split3.now i:nth-child(2){border-right-color:#8a6d18}
 
+/* ---- 컨트롤 접기(폰 세로 전용) ----
+   세로 폰에서는 상단 고정부(영상+NOW+컨트롤)가 화면을 거의 다 차지해
+   차트가 한 줄만 보인다. 속도·캘리브레이션·A-B·BPM은 한 번 맞추면 끝나는
+   컨트롤이라 접을 수 있게 해 차트 가시 영역을 회수한다.
+   다른 레이아웃(태블릿·데스크톱·폰 가로)은 공간이 충분하므로 버튼 자체를 숨긴다. */
+#pFoldRow{ display:none; }
+@media (max-width:767px) and (orientation:portrait){
+  #pFoldRow{ display:flex; }
+  body[data-ctlfold="1"] #pFold{ display:none; }
+}
+
 /* ============================ 반응형 ============================ */
 /* 1. ~767px(폰): 위 기본 스타일 그대로 (변경 없음) */
 
@@ -432,26 +443,29 @@ body[data-src="yt"]   .only-stem{display:none}
     +       '</div>'
     +       '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
     +     '</div>'
-    +     '<div class="only-yt"   id="pSpeedYT"></div>'
-    +     '<div class="only-stem" id="pSpeedStem"></div>'
-    +     '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
-    +     '<div id="pMetro"></div>'
-    +     '<div class="pctl">'
-    +       '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
-    +       '<button id="btnNudgeDn">−0.1s</button>'
-    +       '<button id="btnNudgeUp">+0.1s</button>'
+    +     '<div class="pctl" id="pFoldRow"><button id="btnFold" class="wide">⚙ 컨트롤 접기 ▴</button></div>'
+    +     '<div id="pFold">'
+    +       '<div class="only-yt"   id="pSpeedYT"></div>'
+    +       '<div class="only-stem" id="pSpeedStem"></div>'
+    +       '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
+    +       '<div id="pMetro"></div>'
+    +       '<div class="pctl">'
+    +         '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
+    +         '<button id="btnNudgeDn">−0.1s</button>'
+    +         '<button id="btnNudgeUp">+0.1s</button>'
+    +       '</div>'
+    +       '<div class="only-yt"   id="pLoopYT"></div>'
+    +       '<div class="only-stem" id="pLoopStem"></div>'
+    +       '<div class="pctl">'
+    +         '<span class="lb">BPM</span>'
+    +         '<button data-bpm="-0.5">−0.5</button>'
+    +         '<button data-bpm="-0.1">−0.1</button>'
+    +         '<button data-bpm="0.1">+0.1</button>'
+    +         '<button data-bpm="0.5">+0.5</button>'
+    +       '</div>'
+    +       '<div class="phint">뒤로 갈수록 하이라이트가 빨라지면 BPM ↓, 늦어지면 BPM ↑</div>'
+    +       '<div class="pstat" id="pStat">t0=0.00초 · BPM ' + bpm.toFixed(1) + ' · 대기 · 속도 1x</div>'
     +     '</div>'
-    +     '<div class="only-yt"   id="pLoopYT"></div>'
-    +     '<div class="only-stem" id="pLoopStem"></div>'
-    +     '<div class="pctl">'
-    +       '<span class="lb">BPM</span>'
-    +       '<button data-bpm="-0.5">−0.5</button>'
-    +       '<button data-bpm="-0.1">−0.1</button>'
-    +       '<button data-bpm="0.1">+0.1</button>'
-    +       '<button data-bpm="0.5">+0.5</button>'
-    +     '</div>'
-    +     '<div class="phint">뒤로 갈수록 하이라이트가 빨라지면 BPM ↓, 늦어지면 BPM ↑</div>'
-    +     '<div class="pstat" id="pStat">t0=0.00초 · BPM ' + bpm.toFixed(1) + ' · 대기 · 속도 1x</div>'
     +   '</div>'
     + '</div>';
   }
@@ -682,13 +696,7 @@ body[data-src="yt"]   .only-stem{display:none}
       curIdx = n;
       if(prev >= 0 && bars[prev]) bars[prev].classList.remove('now');
       const elx = (n >= 0 && n < bars.length) ? bars[n] : null;
-      if(elx){
-        elx.classList.add('now');
-        if(autoScroll && Date.now() > userScrollUntil){
-          suppressScrollUntil = Date.now() + 700;
-          scrollToBar(elx);
-        }
-      }
+      if(elx) elx.classList.add('now');
       const nx = (n + 1 >= 0 && n + 1 < bars.length) ? bars[n + 1] : null;
       const nowCode  = (n < 0) ? '대기' : (elx ? barText(elx) : '—');
       const nextCode = nx ? barText(nx) : '—';
@@ -705,6 +713,12 @@ body[data-src="yt"]   .only-stem{display:none}
         't0=' + curT0().toFixed(2) + '초 · BPM ' + bpm.toFixed(1) + ' · 현재 ' +
         (n < 0 ? '대기' : (n >= bars.length ? '끝' : (n + 1) + '/' + bars.length)) +
         ' · 속도 ' + rate + 'x';
+      // 자동 스크롤은 텍스트 갱신 뒤에 — NOW 폰트 크기(길이 기반)가 바뀌면
+      // 상단 고정 영역 높이가 변해서, 먼저 스크롤하면 그만큼 중앙이 어긋난다.
+      if(elx && autoScroll && Date.now() > userScrollUntil){
+        suppressScrollUntil = Date.now() + 700;
+        scrollToBar(elx);
+      }
     }
 
     // NOW 표시: 분할 마디는 조각별 span으로 그려 현재 조각만 강조할 수 있게 한다.
@@ -928,6 +942,20 @@ body[data-src="yt"]   .only-stem{display:none}
       document.getElementById('btnScroll').classList.toggle('on', autoScroll);
     }
 
+    /* ---- 컨트롤 접기(폰 세로) — 곡과 무관한 UI 취향이라 공용 키에 저장 ---- */
+    let ctlFolded = localStorage.getItem('songcore_fold') === '1';
+    function drawFold(){
+      body.setAttribute('data-ctlfold', ctlFolded ? '1' : '0');
+      document.getElementById('btnFold').textContent =
+        ctlFolded ? '⚙ 컨트롤 펼치기 ▾' : '⚙ 컨트롤 접기 ▴';
+    }
+    function toggleFold(){
+      ctlFolded = !ctlFolded;
+      try { localStorage.setItem('songcore_fold', ctlFolded ? '1' : '0'); } catch(e){}
+      drawFold();
+      relayout();                       // 고정 영역 높이가 바뀌었으니 재측정
+    }
+
     /* ---- 분할 레이아웃(데스크톱 / 폰 가로) + 자동 스크롤 ----
        분할에서는 차트(viewF)가 자체 스크롤 컨테이너다. 자동 스크롤은 그
        컨테이너의 scrollTop만 건드리고 window는 절대 움직이지 않는다. */
@@ -1019,6 +1047,8 @@ body[data-src="yt"]   .only-stem{display:none}
     keyOrig.addEventListener('click', function(){ setKey('orig'); });
     keyCapo.addEventListener('click', function(){ setKey('capo'); });
     document.getElementById('btnScroll').addEventListener('click', toggleScroll);
+    document.getElementById('btnFold').addEventListener('click', toggleFold);
+    drawFold();
     document.getElementById('btnMark').addEventListener('click', markStart);
     document.getElementById('btnNudgeDn').addEventListener('click', function(){ nudge(-0.1); });
     document.getElementById('btnNudgeUp').addEventListener('click', function(){ nudge(0.1); });
