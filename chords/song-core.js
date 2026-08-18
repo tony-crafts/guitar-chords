@@ -1,8 +1,9 @@
 /* song-core.js — 차트형 곡 페이지 공용 템플릿/엔진
    곡 데이터 객체 하나를 받아 marigold 계열 페이지(컴팩트/펼침/플레이어 탭,
    키 전환, 플레이어 싱크, t0/BPM 캘리브레이션, 자동스크롤, 주법 배지,
-   반응형, 목록 링크)를 전부 생성·구동한다.
-   practice.js(적응형 속도 + A-B 루프)에 의존한다.
+   박자 블록, 메트로놈, 화면 꺼짐 방지, 반응형, 목록 링크)를 전부 생성·구동한다.
+   practice.js(적응형 속도 + A-B 루프 + Wake Lock)에 의존하고,
+   metronome.js가 있으면 메트로놈 컨트롤을 붙인다(없으면 조용히 생략).
 
    ── 곡 데이터 스키마 ─────────────────────────────────────────────
    {
@@ -188,7 +189,25 @@ body[data-src="yt"]   .only-stem{display:none}
 .ptech.os{ color:var(--gold); }
 #pNowTech{ justify-self:start; }
 #pNextTech{ justify-self:end; }
-/* 3행: 메타 */
+/* 3행: 박자 블록 — 한 마디(4박)를 4칸으로. 현재 박 하이라이트.
+   칸 위에 덧그리는 세로선(.pbdiv)은 이 마디의 코드 경계(반반=1/2, 3분할=1/3·2/3) */
+.pbeats{
+  position:relative; display:grid; grid-template-columns:repeat(4,1fr);
+  gap:3px; margin-top:7px;
+}
+.pbeats .pb{
+  font-style:normal; text-align:center; line-height:15px; height:15px;
+  font-size:9px; font-weight:800; color:var(--dim);
+  font-family:ui-monospace,monospace;
+  background:#141109; border:1px solid var(--line); border-radius:3px;
+}
+.pbeats .pb.on{ background:rgba(240,168,58,.42); border-color:var(--gold); color:#e8dcc0; }
+.pbeats .pb.on.hi{ background:var(--gold); color:#1a1508; }   /* 1박(강세) */
+.pbeats .pbdiv{
+  position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px;
+  background:var(--text); opacity:.8; border-radius:1px; pointer-events:none;
+}
+/* 4행: 메타 */
 .pmeta{
   margin-top:7px; font-size:10.5px; color:var(--dim);
   font-family:ui-monospace,monospace; line-height:1.4;
@@ -396,11 +415,15 @@ body[data-src="yt"]   .only-stem{display:none}
     +         '<span class="ptech" id="pNowTech" style="display:none"></span>'
     +         '<span class="ptech" id="pNextTech" style="display:none"></span>'
     +       '</div>'
+    +       '<div class="pbeats" id="pBeats">'
+    +         '<i class="pb">1</i><i class="pb">2</i><i class="pb">3</i><i class="pb">4</i>'
+    +       '</div>'
     +       '<div class="pmeta" id="pMeta">— · 0/' + barCount + ' 마디</div>'
     +     '</div>'
     +     '<div class="only-yt"   id="pSpeedYT"></div>'
     +     '<div class="only-stem" id="pSpeedStem"></div>'
     +     '<div class="pctl"><button id="btnScroll" class="on wide">↕ 자동스크롤</button></div>'
+    +     '<div id="pMetro"></div>'
     +     '<div class="pctl">'
     +       '<button class="wide" id="btnMark">지금이 1마디 시작</button>'
     +       '<button id="btnNudgeDn">−0.1s</button>'
@@ -434,7 +457,8 @@ body[data-src="yt"]   .only-stem{display:none}
       bpm:    prefix + '_bpm',
       t0:     prefix + '_t0',        speed:      prefix + '_speed',      ab:      prefix + '_ab',
       t0s:    prefix + '_stem_t0',   speedStem:  prefix + '_stem_speed', abStem:  prefix + '_stem_ab',
-      mix:    prefix + '_stem_mix',  src:        prefix + '_src'
+      mix:    prefix + '_stem_mix',  src:        prefix + '_src',
+      metro:  prefix + '_metro'      // 메트로놈 {on, vol, div} — 소스 공용
     };
 
     // ── DOM 조립(모두 body 직속 — 데스크톱 분할 그리드 셀렉터 전제) ──
@@ -480,6 +504,8 @@ body[data-src="yt"]   .only-stem{display:none}
     let t0Stem = parseFloat(localStorage.getItem(K.t0s)) || 0;
     let curIdx = -1, rate = 1, autoScroll = true;
     let suppressScrollUntil = 0, userScrollUntil = 0;
+    let metro = null;                                  // 메트로놈(metronome.js 있을 때)
+    const wake = Practice.wakeLock();                  // 재생 중 화면 꺼짐 방지
 
     /* ---- 소스(유튜브 / 스템) 공통 접근자 ---- */
     function activePlayer(){ return (source === 'stem') ? stem : player; }
@@ -506,6 +532,7 @@ body[data-src="yt"]   .only-stem{display:none}
       if(v === 'P'){
         if(source === 'stem') ensureStem(); else initPlayer();
         startTick();
+        startBeats();
       }
       updateStickyH(); layoutChart();
       suppressScrollUntil = Date.now() + 700;
@@ -603,6 +630,7 @@ body[data-src="yt"]   .only-stem{display:none}
       srcStem.classList.toggle('on', s === 'stem');
       rate = (s === 'stem') ? speedStem.rate : speedYT.rate;
       if(s === 'stem') ensureStem(); else initPlayer();
+      if(metro) metro.reset();                          // 소스가 바뀌면 예약해 둔 클릭을 버린다
       startTick();
       updateStickyH(); layoutChart();
       // 아직 준비 안 된 소스로 옮겼다면 이전 소스의 마디 위치를 남기지 않는다
@@ -616,9 +644,12 @@ body[data-src="yt"]   .only-stem{display:none}
     }
     function tick(){
       const p = activePlayer();
-      if(!p || typeof p.getCurrentTime !== 'function') return;
+      if(!p || typeof p.getCurrentTime !== 'function'){ wake.set(false); return; }
       let st;
-      try { st = p.getPlayerState(); } catch(e){ return; }
+      try { st = p.getPlayerState(); } catch(e){ wake.set(false); return; }
+      wake.set(st === 1);                     // 재생 중에만 화면을 깨워 둔다(정지·일시정지 시 해제)
+      // 준비 안 된 소스(예: 음원을 아직 안 넣은 스템)의 시각 0을 1마디로 읽지 않는다
+      if(!srcReady()) return;
       // 유튜브는 재생/일시정지에서만 추적(버퍼링·큐 상태의 시각은 신뢰도가 낮다)
       if(source === 'yt' && st !== 1 && st !== 2) return;
       let ct;
@@ -697,6 +728,64 @@ body[data-src="yt"]   .only-stem{display:none}
       return b ? b.textContent.trim() : '—';
     }
 
+    /* ---- 박자 블록(마디 = 4박) ----
+       마디 내 경과 ÷ (60/bpm) 로 현재 박을 구한다. getCurrentTime()이 미디어
+       시각이므로 배속을 걸어도 보정이 필요 없다(마디 계산과 같은 기준).
+       마디 갱신(120ms 폴링)보다 촘촘해야 해서 rAF로 따로 돈다. */
+    const beatsEl   = document.getElementById('pBeats');
+    const beatCells = Array.prototype.slice.call(beatsEl.querySelectorAll('.pb'));
+    let beatRaf = null, lastBeat = -2, lastDivKind = -1;
+
+    // 추적 가능한 상태의 현재 미디어 시각(아니면 null)
+    function mediaNow(){
+      const p = activePlayer();
+      if(!srcReady() || !p || typeof p.getCurrentTime !== 'function') return null;
+      let st;
+      try { st = p.getPlayerState(); } catch(e){ return null; }
+      if(st !== 1 && st !== 2) return null;            // 재생·일시정지에서만 신뢰
+      try { return p.getCurrentTime(); } catch(e){ return null; }
+    }
+    function setBeat(b){
+      if(b === lastBeat) return;
+      lastBeat = b;
+      beatCells.forEach(function(c, i){
+        c.classList.toggle('on', i === b);
+        c.classList.toggle('hi', i === b && i === 0);  // 1박 강세
+      });
+    }
+    // 현재 마디의 코드 경계선: 반반 마디 = 3박째(1/2), 3분할 마디 = 1/3·2/3
+    function drawBeatDivs(){
+      const b = (curIdx >= 0 && curIdx < bars.length) ? bars[curIdx] : null;
+      const kind = !b ? 1
+                 : b.classList.contains('split3') ? 3
+                 : b.classList.contains('split')  ? 2 : 1;
+      if(kind === lastDivKind) return;
+      lastDivKind = kind;
+      beatsEl.querySelectorAll('.pbdiv').forEach(function(n){ n.remove(); });
+      for(let i = 1; i < kind; i++){
+        const d = el('b', 'pbdiv');
+        d.style.left = (100 * i / kind) + '%';
+        beatsEl.appendChild(d);
+      }
+    }
+    function updateBeats(){
+      const t = mediaNow();
+      if(t == null || curIdx < 0 || curIdx >= bars.length){ setBeat(-1); return; }
+      const pos = (t - curT0()) / BAR;                 // 마디 단위 위치
+      const f   = pos - Math.floor(pos);               // 마디 내 경과 비율
+      setBeat(Math.max(0, Math.min(3, Math.floor(f * 4))));
+    }
+    function beatLoop(){
+      beatRaf = null;
+      if(!playerTab()) return;                         // 플레이어 탭에서만 돈다
+      updateBeats();
+      drawBeatDivs();
+      beatRaf = requestAnimationFrame(beatLoop);
+    }
+    function startBeats(){
+      if(!beatRaf && playerTab()) beatRaf = requestAnimationFrame(beatLoop);
+    }
+
     /* ---- 컨트롤(공용 practice.js) — 소스별로 한 벌씩 ---- */
     const speedYT = Practice.createSpeed({
       mount: document.getElementById('pSpeedYT'),
@@ -726,20 +815,47 @@ body[data-src="yt"]   .only-stem{display:none}
     });
     rate = (source === 'stem') ? speedStem.rate : speedYT.rate;
 
+    /* ---- 메트로놈(metronome.js) ---- */
+    if(window.Metronome){
+      metro = Metronome.create({
+        mount:      document.getElementById('pMetro'),
+        storageKey: K.metro,
+        // 스템 모드에서는 엔진의 AudioContext에 직접 예약해 샘플 정밀을 얻는다
+        getContext: function(){
+          return (source === 'stem' && stem && stem.getAudioContext) ? stem.getAudioContext() : null;
+        },
+        getTiming: function(){
+          const p = activePlayer();
+          if(!srcReady() || !p || typeof p.getCurrentTime !== 'function') return null;
+          let st, t;
+          try { st = p.getPlayerState(); t = p.getCurrentTime(); } catch(e){ return null; }
+          if(st !== 1) return { playing: false };      // 정지·일시정지 → 클릭 정지
+          return {
+            playing: true, time: t, t0: curT0(), bpm: bpm, rate: rate,
+            ctxTime: (source === 'stem' && stem && stem.mediaToCtxTime) ? stem.mediaToCtxTime : null
+          };
+        },
+        onChange: function(){ updateStickyH(); layoutChart(); }
+      });
+    }
+
     function markStart(){
       const p = activePlayer();
       if(!srcReady() || !p) return;
       setT0(p.getCurrentTime());
+      if(metro) metro.reset();          // 기준점이 바뀌면 예약해 둔 클릭을 다시 잡는다
       refresh();
     }
     function nudge(d){
       setT0(Math.max(0, curT0() + d));
+      if(metro) metro.reset();
       refresh();
     }
     function nudgeBpm(d){
       bpm = Math.min(200, Math.max(60, Math.round((bpm + d) * 10) / 10));
       BAR = 240 / bpm;
       localStorage.setItem(K.bpm, String(bpm));
+      if(metro) metro.reset();
       refresh();
     }
     function toggleScroll(){
@@ -770,20 +886,41 @@ body[data-src="yt"]   .only-stem{display:none}
         if(viewP.style.maxHeight) viewP.style.maxHeight = '';
       }
     }
-    // 현재 마디를 화면 중앙으로. scrollIntoView는 조상 스크롤 컨테이너와 window를
-    // 같이 움직여서(가로모드에서 영상이 밀려남) 쓰지 않고 좌표를 직접 계산한다.
+    /* 상단 고정 영역(.pwrap = 플레이어 + NOW/박자 블록 + 컨트롤)이 뷰포트 위쪽을
+       덮는 높이. 레이아웃·기기·컨트롤 구성(박자 블록·메트로놈 추가 등)에 따라
+       달라지므로 하드코딩하지 않고 그때그때 측정한다.
+       sticky가 아닌 레이아웃(데스크톱·폰 가로 분할)에서는 차트를 덮지 않으므로 0. */
+    function stickyCover(){
+      const w = document.querySelector('.pwrap');
+      if(!w || !w.offsetHeight) return 0;
+      let cs;
+      try { cs = getComputedStyle(w); } catch(e){ return 0; }
+      if(cs.position !== 'sticky' && cs.position !== 'fixed') return 0;
+      const topPx = parseFloat(cs.top) || 0;            // sticky가 멈추는 지점
+      return Math.max(0, topPx + w.getBoundingClientRect().height);
+    }
+    // 현재 마디를 "가려지지 않는 영역"의 중앙으로. scrollIntoView는 조상 스크롤
+    // 컨테이너와 window를 같이 움직여서(가로모드에서 영상이 밀려남) 쓰지 않고
+    // 좌표를 직접 계산한다.
     function scrollToBar(elx){
+      const cover = stickyCover();
       if(splitLayout()){
         const er = elx.getBoundingClientRect(), br = viewF.getBoundingClientRect();
+        // 분할 레이아웃에서 고정 영역은 왼쪽 칸에 있어 보통 0이지만,
+        // 컨테이너 상단을 덮는 경우가 생겨도 그만큼 밀어준다.
+        const cut = Math.max(0, Math.min(cover - br.top, viewF.clientHeight));
+        const visH = Math.max(40, viewF.clientHeight - cut);
         const max = Math.max(0, viewF.scrollHeight - viewF.clientHeight);
         const top = viewF.scrollTop + (er.top - br.top)
-                  - (viewF.clientHeight - elx.offsetHeight) / 2;
+                  - cut - (visH - elx.offsetHeight) / 2;
         viewF.scrollTop = Math.max(0, Math.min(max, Math.round(top)));
       } else {
         // 세로(폰)에서는 문서가 움직이는 것이 의도된 동작. 다만 가로 위치는
         // 건드리지 않도록 좌표를 명시해서 스크롤한다.
         const er = elx.getBoundingClientRect();
-        const top = window.scrollY + er.top - (window.innerHeight - elx.offsetHeight) / 2;
+        const visH = Math.max(40, window.innerHeight - cover);
+        const want = cover + (visH - elx.offsetHeight) / 2;   // 목표 뷰포트 Y
+        const top = window.scrollY + er.top - want;
         window.scrollTo(window.scrollX, Math.max(0, Math.round(top)));
       }
     }
@@ -795,9 +932,9 @@ body[data-src="yt"]   .only-stem{display:none}
     window.addEventListener('scroll', onUserScroll, { passive: true });
     viewF.addEventListener('scroll', onUserScroll, { passive: true });
     viewP.addEventListener('scroll', onUserScroll, { passive: true });
+    // 고정 영역 높이를 CSS 변수로도 노출(.bar의 scroll-margin-top 용)
     function updateStickyH(){
-      const w = document.querySelector('.pwrap');
-      if(w && w.offsetHeight) document.documentElement.style.setProperty('--stickyH', w.offsetHeight + 'px');
+      document.documentElement.style.setProperty('--stickyH', Math.round(stickyCover()) + 'px');
     }
     function relayout(){ updateStickyH(); layoutChart(); }
     window.addEventListener('resize', relayout, { passive: true });
