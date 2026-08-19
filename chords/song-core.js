@@ -590,6 +590,7 @@ body[data-src="yt"]   .only-stem{display:none}
       if(chordListEl && data.chordList) chordListEl.textContent = capo ? data.chordList.capo : data.chordList.original;
       keyOrig.classList.toggle('on', !capo);
       keyCapo.classList.toggle('on', capo);
+      fitRow1();                        // 조옮김으로 이름 길이가 바뀌었을 수 있다
       refresh();
     }
 
@@ -704,7 +705,6 @@ body[data-src="yt"]   .only-stem{display:none}
       document.getElementById('pNext').textContent = nextCode;
       setTech('pNowTech',  elx ? barTech(elx) : '');
       setTech('pNextTech', nx ? barTech(nx) : '');
-      sizeRow1(nowCode, nextCode);
       document.getElementById('pMeta').textContent =
         (elx ? secName(elx) : '—') + ' · ' +
         (n < 0 ? 0 : Math.min(n + 1, bars.length)) + '/' + bars.length + ' 마디';
@@ -767,10 +767,20 @@ body[data-src="yt"]   .only-stem{display:none}
       else if(tech === 'P.M.'){ b.textContent = 'P.M.'; b.className = 'ptech pm'; b.style.display = ''; }
       else { b.textContent = ''; b.className = 'ptech'; b.style.display = 'none'; }
     }
-    function sizeRow1(a, b){
-      const len = a.length + b.length;
+    // NOW/NEXT 폰트 크기는 곡 전체의 최장 NOW+NEXT 조합으로 한 번만 정한다.
+    // 마디마다 길이에 따라 바꾸면 NOW 박스(=상단 고정부) 높이가 재생 내내
+    // 출렁여서 자동 스크롤 목표와 시선이 흔들린다. 코드 이름 길이가 바뀌는
+    // 키(카포) 전환 때만 다시 잰다.
+    function fitRow1(){
+      let max = 0;
+      for(let i = 0; i < bars.length; i++){
+        const a = barText(bars[i]);
+        const b = (i + 1 < bars.length) ? barText(bars[i + 1]) : '—';
+        if(a.length + b.length > max) max = a.length + b.length;
+      }
       document.getElementById('prow1').className =
-        'prow1' + (len > 13 ? ' sz-sm' : len > 8 ? ' sz-md' : '');
+        'prow1' + (max > 13 ? ' sz-sm' : max > 8 ? ' sz-md' : '');
+      updateStickyH();
     }
     function secName(elx){
       const sec = elx.closest('section');
@@ -1049,6 +1059,7 @@ body[data-src="yt"]   .only-stem{display:none}
     document.getElementById('btnScroll').addEventListener('click', toggleScroll);
     document.getElementById('btnFold').addEventListener('click', toggleFold);
     drawFold();
+    fitRow1();
     document.getElementById('btnMark').addEventListener('click', markStart);
     document.getElementById('btnNudgeDn').addEventListener('click', function(){ nudge(-0.1); });
     document.getElementById('btnNudgeUp').addEventListener('click', function(){ nudge(0.1); });
