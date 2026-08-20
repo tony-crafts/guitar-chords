@@ -579,6 +579,7 @@ window.StemEngine = (function(){
         tracks[0].node.onended = function(){        // 자연 종료(정지 시엔 onended를 떼고 stop)
           if(mode === 'wa' && playing){
             playing = false; ended = true; pausedPos = dur;
+            waStop();     // 기준(0번)보다 긴 트랙이 남아 계속 울리지 않게 전부 정지
             drawTransport(); emitState();
           }
         };
@@ -739,16 +740,30 @@ window.StemEngine = (function(){
     }
     function play(){
       if(!hasTracks() || !playable()) return;
-      const pos = ended ? 0 : pausedPos;
+      let pos = ended ? 0 : pausedPos;
+      // 끝(부근)에서의 재개는 처음부터. ended 플래그 없이도 위치가 끝에 가
+      // 있는 상태가 생긴다 — 끝 직전(테일)에 일시정지하면 onended가 떼어져
+      // ended가 안 서고, iOS 인터럽션 중에는 컨텍스트 클럭만 흘러 위치가
+      // dur까지 가버린다. 그대로 시작하면 0.01초 무음 후 즉시 종료라
+      // "재생을 눌러도 소리가 안 나는" 증상이 된다.
+      if(dur && pos >= dur - 0.1) pos = 0;
       ended = false;
       const c = ensureCtx();
       // 화면 잠금 뒤에는 컨텍스트가 suspended/interrupted로 남아 있다.
       // 제스처 안에서 resume을 걸고, 깨어난 다음에 시작한다.
-      if(c && c.state !== 'running'){
+      // · 'mix'(배속 믹스다운)는 컨텍스트에 물리지 않은 <audio> 재생이라
+      //   컨텍스트가 잠들어 있어도 소리가 난다 — 기다리지 않는다.
+      // · iOS는 resume 프라미스가 영영 안 끝나는 사례가 있어(인터럽션 후)
+      //   타임아웃과 경쟁시킨다. 늦게 깨어나면 statechange→recover가 잇는다.
+      if(c && c.state !== 'running' && wantMode() !== 'mix'){
         preparing = true; drawTransport();
-        const go = function(){ preparing = false; startAt(pos); };
+        let done = false;
+        const go = function(){
+          if(done) return;
+          done = true; preparing = false; startAt(pos);
+        };
         let r; try { r = c.resume(); } catch(e){}
-        if(r && r.then) r.then(go, go); else go();
+        if(r && r.then){ r.then(go, go); setTimeout(go, 700); } else go();
         return;
       }
       startAt(pos);
@@ -760,7 +775,10 @@ window.StemEngine = (function(){
       pausedPos = pos; playing = false;
       drawTransport(); emitState();
     }
-    function toggle(){ if(playing) pause(); else play(); }
+    function toggle(){
+      if(preparing) return;              // resume/믹스 준비 대기 중 재진입 방지
+      if(playing) pause(); else play();
+    }
 
     function seekTo(t){
       if(!hasTracks()) return;
