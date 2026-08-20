@@ -463,9 +463,11 @@ window.StemEngine = (function(){
       try { ctx = new AC(); } catch(e){ waOK = false; return null; }
       // iOS 무음 스위치와 무관하게 미디어 채널로 재생 (Safari 16.4+)
       try { if(navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
-      // 인터럽션(전화·잠금)이 끝나 running으로 돌아오면 소스를 다시 세운다
+      // 인터럽션(전화·잠금)이 끝나 running으로 돌아오면 소스를 다시 세운다.
+      // 재생성된 컨텍스트가 아니라 자기 자신일 때만 반응한다.
+      const created = ctx;
       ctx.addEventListener('statechange', function(){
-        if(ctx && ctx.state === 'running') recover();
+        if(ctx === created && ctx.state === 'running') recover();
       });
       tracks.forEach(ensureGain);
       return ctx;
@@ -480,6 +482,19 @@ window.StemEngine = (function(){
       const c = ensureCtx();
       if(c && c.state === 'suspended'){ try { c.resume(); } catch(e){} }
       return c;
+    }
+    /* 잠금이 길어지면(약 8초+) iOS가 오디오 세션을 회수해 기존 컨텍스트가
+       resume으로도 영영 깨어나지 않는 고착 상태가 된다(짧은 잠금은 깨어남).
+       디코딩된 버퍼는 컨텍스트와 무관하므로, 사용자 제스처 안에서 컨텍스트를
+       새로 만들고 게인만 다시 걸면 그대로 재생된다. 반드시 제스처 안에서만
+       부를 것 — 밖에서 만든 새 컨텍스트는 다시 suspended로 태어난다. */
+    function rebuildCtx(){
+      if(ctx){
+        try { ctx.close(); } catch(e){}
+        ctx = null;
+      }
+      tracks.forEach(function(tr){ tr.gain = null; });   // 새 컨텍스트에 다시 만든다
+      return ensureCtx();
     }
 
     /* ---- 믹스(음소거/볼륨) ---- */
@@ -756,6 +771,18 @@ window.StemEngine = (function(){
       // · iOS는 resume 프라미스가 영영 안 끝나는 사례가 있어(인터럽션 후)
       //   타임아웃과 경쟁시킨다. 늦게 깨어나면 statechange→recover가 잇는다.
       if(c && c.state !== 'running' && wantMode() !== 'mix'){
+        // MediaElementSource가 물린 트랙이 없으면(정속 'wa'가 여기 해당)
+        // 지금이 사용자 제스처 안이므로 컨텍스트를 새로 만들어 즉시 시작한다.
+        // resume 대기와 달리 짧은 잠금·긴 잠금(고착) 모두 확실하게 깨어난다.
+        // (createMediaElementSource는 엘리먼트당 1회뿐이라, meSrc가 물린
+        //  legacy 경로는 재생성하면 그 엘리먼트가 영영 무음이 된다 → 제외)
+        const wired = tracks.some(function(tr){ return !!tr.meSrc; });
+        if(!wired){
+          const c2 = rebuildCtx();
+          if(c2 && c2.state === 'suspended'){ try { c2.resume(); } catch(e){} }
+          startAt(pos);
+          return;
+        }
         preparing = true; drawTransport();
         let done = false;
         const go = function(){
