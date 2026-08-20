@@ -409,6 +409,7 @@ window.StemEngine = (function(){
     let driftId  = null, uiId = null;
     let resyncIds= [];
     let lastState= -1;
+    let ctxStale = false;     // 페이지가 백그라운드에 갔다 옴 → 컨텍스트를 믿지 않는다
 
     /* ---- 마크업 ---- */
     mount.classList.add('st-wrap');
@@ -463,9 +464,11 @@ window.StemEngine = (function(){
       try { ctx = new AC(); } catch(e){ waOK = false; return null; }
       // iOS 무음 스위치와 무관하게 미디어 채널로 재생 (Safari 16.4+)
       try { if(navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
-      // 인터럽션(전화·잠금)이 끝나 running으로 돌아오면 소스를 다시 세운다
+      // 인터럽션(전화·잠금)이 끝나 running으로 돌아오면 소스를 다시 세운다.
+      // 재생성된 컨텍스트가 아니라 자기 자신일 때만 반응한다.
+      const created = ctx;
       ctx.addEventListener('statechange', function(){
-        if(ctx && ctx.state === 'running') recover();
+        if(ctx === created && ctx.state === 'running') recover();
       });
       tracks.forEach(ensureGain);
       return ctx;
@@ -480,6 +483,19 @@ window.StemEngine = (function(){
       const c = ensureCtx();
       if(c && c.state === 'suspended'){ try { c.resume(); } catch(e){} }
       return c;
+    }
+    /* 잠금이 길어지면(약 8초+) iOS가 오디오 세션을 회수해 기존 컨텍스트가
+       resume으로도 영영 깨어나지 않는 고착 상태가 된다(짧은 잠금은 깨어남).
+       디코딩된 버퍼는 컨텍스트와 무관하므로, 사용자 제스처 안에서 컨텍스트를
+       새로 만들고 게인만 다시 걸면 그대로 재생된다. 반드시 제스처 안에서만
+       부를 것 — 밖에서 만든 새 컨텍스트는 다시 suspended로 태어난다. */
+    function rebuildCtx(){
+      if(ctx){
+        try { ctx.close(); } catch(e){}
+        ctx = null;
+      }
+      tracks.forEach(function(tr){ tr.gain = null; });   // 새 컨텍스트에 다시 만든다
+      return ensureCtx();
     }
 
     /* ---- 믹스(음소거/볼륨) ---- */
@@ -579,6 +595,7 @@ window.StemEngine = (function(){
         tracks[0].node.onended = function(){        // 자연 종료(정지 시엔 onended를 떼고 stop)
           if(mode === 'wa' && playing){
             playing = false; ended = true; pausedPos = dur;
+            waStop();     // 기준(0번)보다 긴 트랙이 남아 계속 울리지 않게 전부 정지
             drawTransport(); emitState();
           }
         };
@@ -739,16 +756,48 @@ window.StemEngine = (function(){
     }
     function play(){
       if(!hasTracks() || !playable()) return;
-      const pos = ended ? 0 : pausedPos;
+      let pos = ended ? 0 : pausedPos;
+      // 끝(부근)에서의 재개는 처음부터. ended 플래그 없이도 위치가 끝에 가
+      // 있는 상태가 생긴다 — 끝 직전(테일)에 일시정지하면 onended가 떼어져
+      // ended가 안 서고, iOS 인터럽션 중에는 컨텍스트 클럭만 흘러 위치가
+      // dur까지 가버린다. 그대로 시작하면 0.01초 무음 후 즉시 종료라
+      // "재생을 눌러도 소리가 안 나는" 증상이 된다.
+      if(dur && pos >= dur - 0.1) pos = 0;
       ended = false;
       const c = ensureCtx();
       // 화면 잠금 뒤에는 컨텍스트가 suspended/interrupted로 남아 있다.
       // 제스처 안에서 resume을 걸고, 깨어난 다음에 시작한다.
-      if(c && c.state !== 'running'){
+      // · 'mix'(배속 믹스다운)는 컨텍스트에 물리지 않은 <audio> 재생이라
+      //   컨텍스트가 잠들어 있어도 소리가 난다 — 기다리지 않는다.
+      // · iOS는 resume 프라미스가 영영 안 끝나는 사례가 있어(인터럽션 후)
+      //   타임아웃과 경쟁시킨다. 늦게 깨어나면 statechange→recover가 잇는다.
+      // 잠금/앱 전환 뒤에는 컨텍스트 상태를 믿지 않는다 — iOS는 오디오
+      // 세션을 회수하고도 state를 'running'으로 보고하는 경우가 있어,
+      // 상태만 보고 게이트를 타면 죽은 컨텍스트에 예약해 무음이 된다.
+      // 백그라운드에 갔다 온 뒤 첫 재생이면 상태와 무관하게 재생성한다.
+      if(c && (ctxStale || c.state !== 'running') && wantMode() !== 'mix'){
+        // MediaElementSource가 물린 트랙이 없으면(정속 'wa'가 여기 해당)
+        // 지금이 사용자 제스처 안이므로 컨텍스트를 새로 만들어 즉시 시작한다.
+        // resume 대기와 달리 짧은 잠금·긴 잠금(고착) 모두 확실하게 깨어난다.
+        // (createMediaElementSource는 엘리먼트당 1회뿐이라, meSrc가 물린
+        //  legacy 경로는 재생성하면 그 엘리먼트가 영영 무음이 된다 → 제외)
+        const wired = tracks.some(function(tr){ return !!tr.meSrc; });
+        if(!wired){
+          const c2 = rebuildCtx();
+          ctxStale = false;
+          if(c2 && c2.state === 'suspended'){ try { c2.resume(); } catch(e){} }
+          startAt(pos);
+          return;
+        }
+        ctxStale = false;
         preparing = true; drawTransport();
-        const go = function(){ preparing = false; startAt(pos); };
+        let done = false;
+        const go = function(){
+          if(done) return;
+          done = true; preparing = false; startAt(pos);
+        };
         let r; try { r = c.resume(); } catch(e){}
-        if(r && r.then) r.then(go, go); else go();
+        if(r && r.then){ r.then(go, go); setTimeout(go, 700); } else go();
         return;
       }
       startAt(pos);
@@ -760,7 +809,10 @@ window.StemEngine = (function(){
       pausedPos = pos; playing = false;
       drawTransport(); emitState();
     }
-    function toggle(){ if(playing) pause(); else play(); }
+    function toggle(){
+      if(preparing) return;              // resume/믹스 준비 대기 중 재진입 방지
+      if(playing) pause(); else play();
+    }
 
     function seekTo(t){
       if(!hasTracks()) return;
@@ -1110,6 +1162,13 @@ window.StemEngine = (function(){
     function onVisible(){ if(document.visibilityState === 'visible') recover(); }
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('pageshow', onVisible);
+    // 백그라운드로 가는 순간 컨텍스트를 의심 대상으로 표시한다.
+    // (iOS는 잠금·앱 전환 후 세션을 회수해도 state로 드러나지 않을 수 있다)
+    function markStale(){ ctxStale = true; }
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'hidden') markStale();
+    });
+    window.addEventListener('pagehide', markStale);
 
     /* ---- 트랜스포트 이벤트 ---- */
     elPlay.addEventListener('click', function(){
