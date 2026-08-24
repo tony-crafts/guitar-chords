@@ -150,6 +150,7 @@ window.Practice = (function(){
     injectCSS();
     const { mount, storageKey, getPlayer, onSeek } = opts;   // onSeek: 구간 점프 직후 훅(속도 재적용 등)
     let a = null, b = null, on = false, timer = null;
+    let needSeekA = false;                                   // 다음 재생 시작 시 A로 이동 예약
 
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
@@ -157,6 +158,7 @@ window.Practice = (function(){
       if(typeof saved.b === 'number') b = saved.b;
       on = !!saved.on;
     } catch(e){}
+    if(on && a != null && b != null && b > a) needSeekA = true;   // 진입 시 루프 ON이면 첫 재생을 A부터
 
     mount.innerHTML =
       '<div class="pr-row">'
@@ -200,8 +202,23 @@ window.Practice = (function(){
     bT.addEventListener('click', () => {
       if(!on && !valid()){ draw(); return; }             // 유효하지 않으면 켜지 않음(안내만)
       on = !on; save(); draw();
+      if(on) seekA(); else needSeekA = false;            // ON 전환 시 항상 A부터 시작
     });
-    bC.addEventListener('click', () => { a = b = null; on = false; save(); draw(); });
+    bC.addEventListener('click', () => { a = b = null; on = false; needSeekA = false; save(); draw(); });
+
+    // A로 이동. 재생 중이면 즉시, 아니면 다음 재생 시작 시점에 예약(자동재생 유발 방지)
+    function seekA(){
+      const p = getPlayer();
+      let st = null;
+      if(p && p.getPlayerState){ try { st = p.getPlayerState(); } catch(e){} }
+      if(st === 1 && p.seekTo){
+        p.seekTo(a, true);
+        if(onSeek) onSeek();
+        needSeekA = false;
+      } else {
+        needSeekA = true;
+      }
+    }
 
     // 폴링: 루프 ON + 재생 중 + B 도달 → A로 seek
     function poll(){
@@ -210,6 +227,12 @@ window.Practice = (function(){
       if(!p || !p.getCurrentTime || !p.getPlayerState) return;
       let st; try { st = p.getPlayerState(); } catch(e){ return; }
       if(st !== 1) return;                                // 1=재생 중일 때만
+      if(needSeekA){                                      // 예약된 A 이동(진입 첫 재생·정지 중 ON)
+        needSeekA = false;
+        p.seekTo(a, true);
+        if(onSeek) onSeek();
+        return;
+      }
       if(p.getCurrentTime() >= b){
         p.seekTo(a, true);
         if(onSeek) onSeek();                              // seek 직후 속도 재적용 등
