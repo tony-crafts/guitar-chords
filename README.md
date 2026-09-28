@@ -21,6 +21,15 @@ JS를 고치면 이를 부르는 페이지의 `<script src="...?v=">` 값을 함
 1. `chords/<song>.html` 추가
 2. `index.html`의 `.song` 블록을 복사해 `href` / 제목 / 부제 수정
 
+## 작업 도구 (Claude Code 스킬 + 스크립트)
+
+- `/tab-to-chart <영상> <곡 페이지>` — TAB 악보 영상을 판독해 차트 데이터에 반영
+  - `scripts/tab-pages.py` — 영상에서 악보 페이지별 프레임 추출(반복·5마디 페이지 표시)
+- `/make-stems <영상|음원> <곡이름> [자를초]` — 스템 모드용 4트랙 MP3 생성
+  - `scripts/make-stems.sh` — Demucs 분리 → 4트랙 인코딩 → 싱크 검증
+  - 필요: ffmpeg, Demucs 가상환경(`~/.venvs/demucs`, `DEMUCS_VENV`로 변경)
+- `.claude/launch.json` — 로컬 확인용 정적 서버(`python3 -m http.server 8765`)
+
 ## 배포
 
 Vercel 등 정적 호스팅에 저장소를 그대로 연결. 빌드 명령·출력 디렉터리 설정 없음(루트 서빙).
