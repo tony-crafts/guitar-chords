@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fly Me To The Moon — 기타 코드</title>
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="50" y="54" font-size="82" text-anchor="middle" dominant-baseline="central">🎸</text></svg>'>
+<style>
+:root{
+  --bg:#14120e; --panel:#1c1913; --line:#35301f;
+  --text:#ece4d2; --dim:#988e79; --gold:#f0a83a; --brg:#e07b5f;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,'Apple SD Gothic Neo','Pretendard',sans-serif;
+  padding:12px 12px calc(24px + env(safe-area-inset-bottom));
+  max-width:520px; margin:0 auto;
+}
+header{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; padding:2px 2px 10px}
+header h1{font-size:22px; letter-spacing:.5px; color:var(--gold); font-weight:800}
+header .meta{font-size:11.5px; color:var(--dim); letter-spacing:.4px}
+.back{display:inline-block; font-size:11.5px; color:var(--dim); text-decoration:none; margin-bottom:8px}
+.back:hover{color:var(--gold)}
+.pvid{
+  position:relative; width:100%; aspect-ratio:16/9;
+  background:#000; border:1px solid var(--line); border-radius:8px; overflow:hidden;
+  margin-bottom:10px;
+}
+.pvid iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
+.panel{
+  background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  padding:9px 12px 12px; margin-bottom:9px;
+}
+.panel h2{font-size:12px; font-weight:800; color:var(--gold); letter-spacing:.4px}
+.panel .cap{font-size:10.5px; color:var(--dim); margin-top:2px; line-height:1.5}
+/* 속도 박스 타이틀·설명·상태줄: 폰(≤767px)에서는 숨김(현재 레이아웃 유지) → 768px~에서만 노출 */
+.sp-desk{display:none}
+footer{margin-top:14px; font-size:10px; color:#6b6250; line-height:1.6; padding:0 2px}
+
+/* ============================ 반응형 ============================ */
+/* ~767px(폰): 위 기본 스타일 그대로 (변경 없음) */
+
+/* 768px~(데스크톱/태블릿): 컨테이너 확장 + 영상 크게 + 컨트롤 2컬럼 */
+@media (min-width:768px){
+  body{ max-width:1280px; padding:16px 20px calc(28px + env(safe-area-inset-bottom)); }
+  /* 영상: 16:9 유지, 세로 72vh와 가로(컨테이너 폭) 중 먼저 닿는 쪽에 맞춰 가운데 정렬.
+     width는 min(컨테이너 폭, 72vh를 16:9로 환산한 폭) → aspect-ratio가 높이를 파생 */
+  .pvid{
+    width:min(100%, calc(72vh * 16 / 9));
+    max-height:72vh;
+    margin-left:auto; margin-right:auto;
+    margin-bottom:14px;
+  }
+  /* 속도 · A-B 루프 패널을 한 줄 2컬럼으로 (영상+컨트롤이 한 화면에 들어오도록).
+     stretch → 두 박스 내용 높이가 미세하게 달라도 같은 높이로 정렬 */
+  .controls{ display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:stretch; }
+  .controls .panel{ margin-bottom:0; }
+  .sp-desk{ display:block; }
+}
+
+/* 납작한 가로화면(폰 가로): 영상 좌(높이 기준)+컨트롤 우, 헤더 숨김, 전체 폭 */
+@media (max-height:500px) and (orientation:landscape){
+  body{
+    max-width:none; padding:6px 10px calc(6px + env(safe-area-inset-bottom));
+    display:grid; grid-template-columns:auto minmax(0,1fr); column-gap:12px; align-items:start;
+  }
+  .back{ grid-column:1 / -1; margin-bottom:2px; }
+  header{ display:none; }                 /* 세로 점유 최소화 */
+  .pvid{
+    grid-column:1; margin:0; max-height:none;
+    width:min(62vw, calc((100dvh - 40px) * 16 / 9));   /* 폭·높이 중 먼저 닿는 쪽 → 잘림 없음 */
+  }
+  .controls{
+    grid-column:2; display:flex; flex-direction:column; gap:8px;
+    max-height:calc(100dvh - 40px); overflow-y:auto;
+  }
+  .controls .panel{ margin-bottom:0; }
+  .sp-desk{ display:block; }
+}
+</style>
+</head>
+<body>
+
+<a class="back" href="/index.html">‹ 목록</a>
+
+<header>
+  <h1>Fly Me To The Moon</h1>
+  <span class="meta">Jazz/Swing feel · Backing Track · 영상 연습</span>
+</header>
+
+<div class="pvid"><div id="ytPlayer"></div></div>
+
+<div class="controls">
+  <div class="panel">
+    <h2 class="sp-desk">재생 속도</h2>
+    <div class="cap sp-desk">슬라이더나 [−]·[+]로 재생 속도를 조절 — 느린 구간을 천천히 반복 연습할 때.</div>
+    <div id="prSpeed"></div>
+    <div class="pr-stat sp-desk" id="prSpeedStat">현재 1x</div>
+  </div>
+
+  <div class="panel">
+    <h2>A-B 구간 루프</h2>
+    <div class="cap">재생 중 [A 설정]·[B 설정]로 구간을 잡고 [루프 ON] — B에 닿으면 A로 되돌아갑니다.</div>
+    <div id="prLoop"></div>
+  </div>
+</div>
+
+<footer>차트·마디 싱크 없이 영상 반복 연습용 페이지입니다. 속도·구간 설정은 이 기기에 저장됩니다.</footer>
+
+<!-- 배포 후 새 코드가 늦게 잡히면 아래 ?v= 값을 함께 올릴 것 -->
+<script src="practice.js?v=20260818a"></script>
+<script>
+const VIDEO_ID = 'KJvFM1uS8ew';        // Fly Me To The Moon — Jazz/Swing Backing Track
+let player = null, ready = false, apiRequested = false;
+const wake = Practice.wakeLock();      // 재생 중 화면 꺼짐 방지(미지원 브라우저는 무시)
+
+// 컨트롤은 로드 시 생성(플레이어는 아직 없음 → onReady에서 연결)
+const speedStat = document.getElementById('prSpeedStat');
+function drawSpeedStat(r){ speedStat.textContent = '현재 ' + (+r.toFixed(2)) + 'x'; }
+const speedCtl = Practice.createSpeed({
+  mount: document.getElementById('prSpeed'),
+  storageKey: 'flymetothemoon_speed',
+  getPlayer: () => player,
+  onRate: drawSpeedStat            // 속도 변경 시 상태줄("현재 1x") 동기화
+});
+drawSpeedStat(speedCtl.rate);      // 초기값(저장된 속도) 반영
+const loopCtl = Practice.createLoop({
+  mount: document.getElementById('prLoop'),
+  storageKey: 'flymetothemoon_ab',
+  getPlayer: () => player,
+  onSeek: () => speedCtl.reapply()   // 구간 점프 후 속도 유지
+});
+
+function initPlayer(){
+  if(player || apiRequested) return;
+  apiRequested = true;
+  if(window.YT && window.YT.Player){ createPlayer(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
+}
+window.onYouTubeIframeAPIReady = createPlayer;
+
+function createPlayer(){
+  if(player) return;
+  player = new YT.Player('ytPlayer', {
+    videoId: VIDEO_ID,
+    playerVars: { playsinline: 1, rel: 0 },
+    events: {
+      onReady: function(){
+        if(ready) return;   // onReady 중복 발화 방지
+        ready = true;
+        speedCtl.onReady();
+        loopCtl.onReady();
+      },
+      onPlaybackRateChange: function(e){ speedCtl.onPlaybackRateChange(e.data); },
+      onStateChange: function(e){ wake.set(e.data === 1); },   // 재생 중에만 화면을 깨워 둠
+    }
+  });
+}
+
+initPlayer();
+</script>
+</body>
+</html>
