@@ -14,13 +14,21 @@
 <script src="stem-engine.js?v=20260820b"></script>
 <script src="song-core.js?v=20260820b"></script>
 <script>
-/* ── 반복 마디 블록(청음 확정 전까지 여기만 고치면 컴팩트/펼침 동시 반영) ── */
-var RIFF = [                                   // 인트로 리프 = 8마디(2줄)
+/* ── 반복 마디 블록 — 영상 TAB 악보(GRAB THE GUITAR 일렉 커버) 기준 ── */
+var RIFF = [                                   // 인트로 리프 = 8마디(2줄) · 단음 리드
   ['Gb,F','Bbm,Eb','Ebm,Ab','Db'],
   ['Gb,F','Bbm,Eb','Gb,Ab','Db']
 ];
 var VERSE = ['Db,Ab','Bbm','Gb,Ab','Db,Dbsus4,Db'];   // 4번째 마디 3분할
 var CHOR  = ['Gb,F','Bbm,Eb','Ebm,Ab','Db5'];         // 후렴 4마디 패턴
+var BRIDGE = ['Gb','Db5','Adim7','Bbm7,Eb'];
+var BUILD  = ['Eb','Eb','Ab','Ab'];
+var OUTRO  = ['Gb,Ab','Db5*','Gb,Ab','Db5*','Db5'];   // 5마디 한 줄(TAB 그대로)
+var ENDING = ['Gb,Ab','Db^끝*'];
+
+var RIFF_NOTE  = '<b>단음 리프</b> — 1·2번 줄 11~16프렛 · Gb 첫 음 ½ 벤딩 · 2줄째 Ab에서 <b>full 벤딩</b>';
+var CHOR_NOTE  = '8비트 · 2번째 코드(F·Eb·Ab)는 <b>2박 뒷박</b>에서 당겨 들어옴 · 마지막 마디 Db5 파워코드';
+var VERSE_NOTE = '8비트 · 마지막 마디 Db → <b>Dbsus4</b>(1번 줄 7프렛) → Db';
 
 SongCore.init({
   title: '용의자',
@@ -45,42 +53,42 @@ SongCore.init({
 
   /* ============ 컴팩트(반복은 ×N 배지) ============ */
   compact: {
-    flow: '순서: 인트로 리프 → <b>벌스1</b> → <b>후렴1</b> → 벌스2 → 후렴2 → <b>브릿지</b> → 빌드업 → 리프 재현 → <b>후렴3</b> → 아웃트로 → 리프 → 엔딩',
+    flow: '순서: 인트로 리프 → <b>벌스1</b> → <b>후렴1</b> → 벌스2 → 후렴2 → <b>브릿지</b> → 빌드업 → 리프 재현 → <b>후렴3</b>(×4) → 아웃트로 → 리프 → 엔딩',
     blocks: [
-      { name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF },
-      { name:'벌스 1',      color:'verse', meta:'4마디', repeat:'×2', rows:[ VERSE ] },
-      { name:'후렴 1',      color:'cho',   meta:'4마디', repeat:'×2', rows:[ CHOR ] },
+      { name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF, note: RIFF_NOTE },
+      { name:'벌스 1',      color:'verse', meta:'4마디', repeat:'×2', rows:[ VERSE ], note: VERSE_NOTE },
+      { name:'후렴 1',      color:'cho',   meta:'4마디', repeat:'×2', rows:[ CHOR ], note: CHOR_NOTE },
       { name:'벌스 2',      color:'verse', meta:'4마디', repeat:'×2', rows:[ VERSE ], note:'벌스 1과 동일' },
       { name:'후렴 2',      color:'cho',   meta:'4마디', repeat:'×2', rows:[ CHOR ], note:'후렴 1과 동일' },
-      { name:'브릿지',      color:'brg',   meta:'4마디', rows:[ ['Gb','Db5','Adim7','Bbm7,Eb'] ] },
-      { name:'빌드업',      color:'pre',   meta:'4마디', rows:[ ['Eb','Eb','Ab','Ab'] ] },
+      { name:'브릿지',      color:'brg',   meta:'4마디', rows:[ BRIDGE ], note:'8비트 · Adim7·Bbm7은 5번 줄 뮤트(X) · <b>Eb는 4박 뒷박</b>에 당겨 들어와 빌드업으로 이음' },
+      { name:'빌드업',      color:'pre',   meta:'4마디', rows:[ BUILD ], note:'8비트 · 마지막 Ab 끝 8분음을 다음 마디로 붙여(타이) 리프 진입' },
       { name:'리프 재현',   color:'dim',   meta:'8마디', rows: RIFF, note:'인트로 리프와 동일' },
-      { name:'후렴 3',      color:'cho',   meta:'4마디', repeat:'×3', rows:[ CHOR ] },
-      { name:'아웃트로',    color:'qt',    meta:'4마디', rows:[ ['Gb,Ab','Db5','Gb,Ab','Db5'] ] },
-      { name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'인트로 리프와 동일 · 2줄째 끝 Db 여음' },
-      { name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ['Gb,Ab','Db^끝'] ] }
+      { name:'후렴 3',      color:'cho',   meta:'4마디', repeat:'×4', rows:[ CHOR ], note:'후렴 1과 동일 · <b>4번</b> 반복' },
+      { name:'아웃트로',    color:'qt',    meta:'5마디', rows:[ OUTRO ], note:'Gb·Ab는 4분음 스트로크(울림 유지) · <b>◇</b> Db5 한 번 치고 링 · 5마디째 Db5는 이어 받아 8비트' },
+      { name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'인트로 리프와 동일 · 2줄째 끝 Db 여음 후 9프렛 픽업' },
+      { name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ENDING ], note:'리프 마지막 두 마디(Gb·Ab full 벤딩 → Db) 한 번 더 · Db 여음으로 끝' }
     ],
-    legend: '한 칸 = 1마디(4박) · 칸 안 점선 분할 = 앞 2박 / 뒤 2박 (3분할은 균등 분할) · ×N = 반복<br> 주법 표기는 추후 추가 예정'
+    legend: '한 칸 = 1마디(4박) · 칸 안 점선 분할 = 앞 2박 / 뒤 2박 (3분할은 균등 분할) · ×N = 반복<br> <b>주법</b>: 무표시 = 기본 8비트 · <b>◇</b> = 원샷(마디당 1번, 링) · 리프는 단음 연주'
   },
 
-  /* ============ 펼침(실제 연주 순서, 총 82마디 · 반복 횟수 청음 확정) ============ */
+  /* ============ 펼침(실제 연주 순서, 총 87마디 · 영상 TAB 기준) ============ */
   expanded: {
-    flow: '위에서 아래로 실제 연주 순서 그대로 (총 82마디) · 반복 횟수는 청음 확정',
+    flow: '위에서 아래로 <b>실제 연주 순서 그대로</b> (총 87마디) · 영상 TAB 악보 기준',
     blocks: [
-      { pass:1,  name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF },
+      { pass:1,  name:'인트로 리프', color:'dim',   meta:'8마디', rows: RIFF, note:'단음 리프 · 2줄째 Ab <b>full 벤딩</b>' },
       { pass:2,  name:'벌스 1',      color:'verse', meta:'8마디', rows:[ VERSE, VERSE ] },
       { pass:3,  name:'후렴 1',      color:'cho',   meta:'8마디', rows:[ CHOR, CHOR ] },
       { pass:4,  name:'벌스 2',      color:'verse', meta:'8마디', rows:[ VERSE, VERSE ] },
       { pass:5,  name:'후렴 2',      color:'cho',   meta:'8마디', rows:[ CHOR, CHOR ] },
-      { pass:6,  name:'브릿지',      color:'brg',   meta:'4마디', rows:[ ['Gb','Db5','Adim7','Bbm7,Eb'] ] },
-      { pass:7,  name:'빌드업',      color:'pre',   meta:'4마디', rows:[ ['Eb','Eb','Ab','Ab'] ] },
+      { pass:6,  name:'브릿지',      color:'brg',   meta:'4마디', rows:[ BRIDGE ], note:'Eb는 4박 뒷박에 당겨 들어옴' },
+      { pass:7,  name:'빌드업',      color:'pre',   meta:'4마디', rows:[ BUILD ] },
       { pass:8,  name:'리프 재현',   color:'dim',   meta:'8마디', rows: RIFF },
-      { pass:9,  name:'후렴 3',      color:'cho',   meta:'12마디', rows:[ CHOR, CHOR, CHOR ] },
-      { pass:10, name:'아웃트로',    color:'qt',    meta:'4마디', rows:[ ['Gb,Ab','Db5','Gb,Ab','Db5'] ] },
-      { pass:11, name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'2줄째 끝 Db 여음' },
-      { pass:12, name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ['Gb,Ab','Db^끝'] ] }
+      { pass:9,  name:'후렴 3',      color:'cho',   meta:'16마디', rows:[ CHOR, CHOR, CHOR, CHOR ] },
+      { pass:10, name:'아웃트로',    color:'qt',    meta:'5마디', rows:[ OUTRO ], note:'<b>◇</b> Db5 한 번 치고 링 · 5마디째만 8비트' },
+      { pass:11, name:'아웃트로 리프', color:'dim', meta:'8마디', rows: RIFF, note:'2줄째 끝 Db 여음 후 9프렛 픽업' },
+      { pass:12, name:'엔딩',        color:'coda',  meta:'2마디', rows:[ ENDING ] }
     ],
-    legend: '한 칸 = 1마디(4박) · 점선 분할 칸 = 나눠 짚기 (3분할 = 균등)<br> 사용 코드: <b id="chordList">Db · Db5 · Dbsus4 · Ab · Bbm · Bbm7 · Gb · F · Eb · Ebm · Adim7</b>'
+    legend: '한 칸 = 1마디(4박) · 점선 분할 칸 = 나눠 짚기 (3분할 = 균등)<br> <b>주법</b>: 무표시 = 기본 8비트 · <b>◇</b> = 원샷(마디당 1번, 링)<br> 사용 코드: <b id="chordList">Db · Db5 · Dbsus4 · Ab · Bbm · Bbm7 · Gb · F · Eb · Ebm · Adim7</b>'
   }
 });
 </script>
