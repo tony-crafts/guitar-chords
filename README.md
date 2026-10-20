@@ -28,6 +28,9 @@ JS를 고치면 이를 부르는 페이지의 `<script src="...?v=">` 값을 함
 - `/make-stems <영상|음원> <곡이름> [자를초]` — 스템 모드용 4트랙 MP3 생성
   - `scripts/make-stems.sh` — Demucs 분리 → 4트랙 인코딩 → 싱크 검증
   - 필요: ffmpeg, Demucs 가상환경(`~/.venvs/demucs`, `DEMUCS_VENV`로 변경)
+- `tools/tab-draft/tab-draft.py <음원> [옵션]` — 음원 구간 → 기타 멜로디 타브 초안(텍스트·GP5·MusicXML·확인용 wav)
+  - 설치·옵션·정확도 평가는 `tools/tab-draft/README.md`. 박자 격자는 `tools/common/beats.py`(공용)
+  - 필요: Python 3.12 가상환경 `~/.venvs/tab`, ffmpeg. 음원 분리를 쓰면 Demucs 가상환경도
 - `.claude/launch.json` — 로컬 확인용 정적 서버(`python3 -m http.server 8765`)
 
 ## 배포

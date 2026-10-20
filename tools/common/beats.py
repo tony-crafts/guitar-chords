@@ -1,0 +1,253 @@
+"""박자·마디 격자 — 코드 추출(1단계)과 타브 초안(2단계)이 함께 쓰는 모듈.
+
+사용 흐름
+    grid = track_beats(y, sr, bpm=None 또는 숫자, beats_per_bar=4)
+    bar, t16, err = grid.quantize(1.23)      # 초 → (마디 번호 0부터, 16분 위치, 격자 오차 초)
+    t = grid.time_of(bar, t16)               # 반대 방향
+
+bpm을 주면: 고정 간격 격자를 만들고 온셋(음 시작) 에너지에 가장 잘 맞는 위상(첫 박 위치)을 고른다.
+bpm이 없으면: librosa 비트 추적 결과(균일하지 않을 수 있음)를 그대로 쓴다.
+첫 마디(다운비트)는 네 가지 위상 중 온셋 에너지가 가장 센 쪽을 고른다 — 틀릴 수 있으니 결과에 적어 둔다.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+
+@dataclass
+class BeatGrid:
+    beat_times: np.ndarray          # 각 박의 시각(초). 구간 전체를 덮도록 앞뒤로 늘려 둠
+    bpm: float
+    beats_per_bar: int = 4
+    downbeat_phase: int = 0         # beat_times[downbeat_phase]가 첫 마디 첫 박
+    source: str = "librosa"         # 'fixed' | 'librosa'
+    swing: bool = False             # 스윙이면 박을 3등분해 뒷박 8분음표를 2/3 지점으로 본다
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def sub(self) -> int:           # 마디당 16분음표 수
+        return self.beats_per_bar * 4
+
+    def beat_pos(self, t: float) -> float:
+        """시각 → 다운비트 기준 박 위치(실수). 박 사이는 선형 보간."""
+        bt = self.beat_times
+        i = int(np.searchsorted(bt, t, side="right") - 1)
+        i = max(0, min(i, len(bt) - 2))
+        return i - self.downbeat_phase + (t - bt[i]) / (bt[i + 1] - bt[i])
+
+    # 스윙일 때 16분 칸 k ↔ 박 안 위치
+    _SWING_POS = (0.0, 1 / 3, 2 / 3, 5 / 6)
+
+    def quantize(self, t: float, div: int = 4) -> tuple[int, int, float]:
+        """시각 → (마디, 16분 위치, 격자와의 오차 초). div=4면 박을 4등분(16분).
+        스윙이면 박 안 위치를 0 / 1/3 / 2/3 로 나눠 k = 0 / 1 / 2 (뒷박 8분음표 = 2)."""
+        bt = self.beat_times
+        i = int(np.searchsorted(bt, t, side="right") - 1)
+        i = max(0, min(i, len(bt) - 2))
+        period = bt[i + 1] - bt[i]
+        frac = (t - bt[i]) / period
+        if self.swing and div == 4:
+            k = 0 if frac < 0.2 else 1 if frac < 0.5 else 2 if frac < 0.84 else 4
+        else:
+            k = int(round(frac * div))
+        beat_idx = i - self.downbeat_phase
+        if k >= div:                                   # 다음 박으로 반올림
+            k = 0
+            beat_idx += 1
+        snapped = self.time_of_beat(beat_idx + k / div)
+        bar, beat_in_bar = divmod(beat_idx, self.beats_per_bar)
+        return bar, beat_in_bar * div + k, t - snapped
+
+    def time_of_beat(self, beat_pos: float) -> float:
+        """다운비트 기준 박 위치(실수, 예: 2.25) → 초."""
+        i = int(np.floor(beat_pos)) + self.downbeat_phase
+        frac = beat_pos - np.floor(beat_pos)
+        if self.swing:
+            k = int(round(frac * 4)) % 4
+            frac = self._SWING_POS[k]
+        bt = self.beat_times
+        if i < 0:
+            return float(bt[0] + (beat_pos + self.downbeat_phase) * (bt[1] - bt[0]))
+        if i >= len(bt) - 1:
+            return float(bt[-1] + (i - (len(bt) - 1) + frac) * (bt[-1] - bt[-2]))
+        return float(bt[i] + frac * (bt[i + 1] - bt[i]))
+
+    def time_of(self, bar: int, t16: int) -> float:
+        return self.time_of_beat(bar * self.beats_per_bar + t16 / 4)
+
+    def bar_count(self, duration: float) -> int:
+        bar, t16, _ = self.quantize(duration)
+        return bar + (1 if t16 > 0 else 0)
+
+
+def _onset_envelope(y: np.ndarray, sr: int, hop: int = 512):
+    import librosa
+    oenv = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    times = librosa.frames_to_time(np.arange(len(oenv)), sr=sr, hop_length=hop)
+    return oenv, times
+
+
+def _extend(beats: np.ndarray, duration: float, period: float) -> np.ndarray:
+    """격자를 0초 이전과 끝 이후까지 늘려 구간 전체를 덮게 한다."""
+    beats = list(beats)
+    while beats[0] - period > -period:        # 0초 조금 앞까지
+        beats.insert(0, beats[0] - period)
+    while beats[-1] < duration + period:
+        beats.append(beats[-1] + period)
+    return np.array(beats)
+
+
+def _pick_downbeat(beats: np.ndarray, oenv: np.ndarray, times: np.ndarray, beats_per_bar: int) -> int:
+    """네 위상 중 마디 첫 박 자리의 온셋 에너지 합이 가장 큰 위상."""
+    strength = np.interp(beats, times, oenv, left=0, right=0)
+    best, best_s = 0, -1.0
+    for p in range(beats_per_bar):
+        s = strength[p::beats_per_bar].sum()
+        if s > best_s:
+            best, best_s = p, s
+    # 첫 박보다 앞쪽 격자점이 있으면 위상을 0~beats_per_bar-1 안으로
+    return best
+
+
+def track_beats(y: np.ndarray, sr: int, bpm: float | None = None,
+                beats_per_bar: int = 4) -> BeatGrid:
+    import librosa
+    duration = len(y) / sr
+    oenv, times = _onset_envelope(y, sr)
+    notes: list[str] = []
+
+    if bpm:
+        period = 60.0 / bpm
+        # 위상: 한 박 길이를 40등분해서 격자점 온셋 합이 최대인 오프셋
+        best_off, best_s = 0.0, -1.0
+        for off in np.linspace(0, period, 40, endpoint=False):
+            grid = np.arange(off, duration, period)
+            s = np.interp(grid, times, oenv, left=0, right=0).sum()
+            if s > best_s:
+                best_off, best_s = off, s
+        beats = np.arange(best_off, duration + period, period)
+        source = "fixed"
+        notes.append(f"고정 템포 {bpm:.1f} BPM, 첫 박 오프셋 {best_off * 1000:.0f}ms")
+    else:
+        tempo, frames = librosa.beat.beat_track(onset_envelope=oenv, sr=sr, hop_length=512, units="frames")
+        beats = librosa.frames_to_time(frames, sr=sr, hop_length=512)
+        tempo = float(np.atleast_1d(tempo)[0])
+        if len(beats) < 4:
+            period = 60.0 / (tempo or 120)
+            beats = np.arange(0, duration + period, period)
+            notes.append("비트 추적 실패 — 추정 템포로 고정 격자 사용")
+        period = float(np.median(np.diff(beats)))
+        bpm = 60.0 / period
+        source = "librosa"
+        notes.append(f"비트 추적 템포 {bpm:.1f} BPM (박 간격 편차 {np.std(np.diff(beats)) * 1000:.0f}ms)")
+
+    beats = _extend(np.asarray(beats, dtype=float), duration, period)
+    # 다운비트는 0초 이후 첫 박부터 센다
+    first = int(np.searchsorted(beats, 0.0))
+    phase = first + _pick_downbeat(beats[first:], oenv, times, beats_per_bar)
+    grid = BeatGrid(beat_times=beats, bpm=float(bpm), beats_per_bar=beats_per_bar,
+                    downbeat_phase=phase, source=source, notes=notes)
+    grid.notes.append(f"첫 마디 시작 {grid.time_of(0, 0):.3f}s (온셋 세기로 추정 — 틀리면 --bar-offset 로 보정)")
+    return grid
+
+
+def estimate_feel(onsets: list[tuple[float, float]], grid: BeatGrid,
+                  max_offset: float = 0.3) -> dict:
+    """멜로디 음 시작(시각, 가중치) 목록으로 ① 격자 오프셋 ② 스윙 여부를 함께 추정한다.
+
+    직선(뒷박 = 1/2)과 스윙(뒷박 = 2/3) 두 가설마다, 오프셋을 바꿔 가며
+    "음이 정박(가중 1.0) 또는 뒷박(가중 0.7) 위에 얼마나 모이는가" 점수를 매기고 최댓값을 고른다.
+    양수 오프셋 = 연주가 비트 격자보다 늦음.
+    """
+    if len(onsets) < 8:
+        return {"offset": 0.0, "swing": False, "offbeat_median": None, "n": len(onsets), "score": 0.0}
+    ts = np.array([o[0] for o in onsets]); ws = np.array([o[1] for o in onsets])
+    durs = np.array([o[2] if len(o) > 2 else 0.0 for o in onsets])
+    base = np.array([grid.beat_pos(t) for t in ts])
+    beat = 60.0 / grid.bpm
+    w_off = _offbeat_weight(durs, beat)
+    hyps = {"straight": 0.5, "swing": 2 / 3}
+    best = (-np.inf, 0.0, "straight")
+    for name, p_off in hyps.items():
+        for off in np.arange(-max_offset, max_offset + 1e-9, 0.005):
+            fr = (base - off / beat) % 1.0
+            sc_on = np.cos(2 * np.pi * fr)
+            sc_off = w_off * np.cos(2 * np.pi * (fr - p_off))
+            sc = float(np.sum(ws * np.maximum(sc_on, sc_off)))
+            if sc > best[0]:
+                best = (sc, float(off), name)
+    sc, off, name = best
+    fr = (base - off / beat) % 1.0
+    offb = fr[(fr > 0.3) & (fr < 0.95)]
+    med = float(np.median(offb)) if len(offb) >= 8 else None
+    return {"offset": off, "swing": name == "swing", "offbeat_median": med, "n": len(ts), "score": sc}
+
+
+def _offbeat_weight(durs: np.ndarray, beat: float) -> np.ndarray:
+    """뒷박 가설 가중: 짧은 음 0.7, 한 박 길이의 70% 이상 울리는 긴 음(4분음표급)은 0.35 — 긴 음은 정박일 가능성이 높다."""
+    return np.where(durs >= 0.7 * beat, 0.35, 0.7)
+
+
+def _feel_score(fr: np.ndarray, ws: np.ndarray, w_off: np.ndarray, swing: bool) -> float:
+    p_off = 2 / 3 if swing else 0.5
+    return float(np.sum(ws * np.maximum(np.cos(2 * np.pi * fr), w_off * np.cos(2 * np.pi * (fr - p_off)))))
+
+
+def estimate_local_offsets(onsets: list[tuple[float, float]], grid: BeatGrid, swing: bool,
+                           global_offset: float, window_bars: int = 4, hop_bars: int = 2,
+                           max_dev: float = 0.25, min_notes: int = 5, min_margin: float = 0.3) -> list[tuple[float, float, int]]:
+    """프레이즈 단위 오프셋. 전체 오프셋(global_offset)이 이미 격자에 적용된 상태에서 호출한다.
+
+    window_bars 길이 창을 hop_bars씩 옮기며 창 안 음들로 오프셋(전체 대비 ±max_dev 초)을 추정한다.
+    근거가 확실한 창만 채택한다: 음이 min_notes 이상이고, 최적 오프셋의 점수가 0일 때보다
+    (가중합 대비) min_margin 이상 높을 때. 나머지 창은 0(= 전체 오프셋 유지).
+    반환: [(창 중심 시각, 추가 오프셋 초, 음 수, 시작 마디, 우위)]
+    """
+    if not onsets:
+        return []
+    ts = np.array([o[0] for o in onsets]); ws = np.array([o[1] for o in onsets])
+    durs = np.array([o[2] if len(o) > 2 else 0.0 for o in onsets])
+    bp = np.array([grid.beat_pos(t) for t in ts])
+    bpb = grid.beats_per_bar
+    beat = 60.0 / grid.bpm
+    w_off_all = _offbeat_weight(durs, beat)
+    window_bars_ = window_bars
+    last_bar = int(np.floor(bp.max() / bpb)) + 1
+    out = []
+    for b0 in range(0, last_bar, hop_bars):
+        sel = (bp >= b0 * bpb) & (bp < (b0 + window_bars) * bpb)
+        center = grid.time_of_beat((b0 + window_bars / 2) * bpb)
+        if sel.sum() < min_notes:
+            out.append((center, 0.0, int(sel.sum()), b0, 0.0))
+            continue
+        s0 = _feel_score(bp[sel] % 1.0, ws[sel], w_off_all[sel], swing)
+        best, best_s = 0.0, -np.inf
+        for off in np.arange(-max_dev, max_dev + 1e-9, 0.005):
+            fr = (bp[sel] - off / beat) % 1.0
+            sc = _feel_score(fr, ws[sel], w_off_all[sel], swing)
+            if sc > best_s:
+                best, best_s = float(off), sc
+        margin = (best_s - s0) / ws[sel].sum()
+        at_edge = abs(best) >= max_dev - 0.0051          # 탐색 범위 끝에 걸린 값은 믿지 않는다
+        out.append((center, best if (margin >= min_margin and not at_edge) else 0.0, int(sel.sum()), b0, float(margin)))
+    return out
+
+
+def apply_local_offsets(grid: BeatGrid, local: list, window_bars: int) -> None:
+    """마디마다 그 마디를 덮는 창 중 근거(우위)가 가장 강한 창의 오프셋을 그대로 쓴다(계단식).
+    프레이즈 사이에서 값이 바뀌므로 경계 박 하나가 늘거나 줄지만, 보간으로 희석되는 것보다 낫다."""
+    if not local:
+        return
+    bpb = grid.beats_per_bar
+    n_beats = len(grid.beat_times)
+    per_beat = np.zeros(n_beats)
+    for i in range(n_beats):
+        bar = (i - grid.downbeat_phase) // bpb
+        best_m, best_o = -1.0, 0.0
+        for _, off, n, b0, margin in local:
+            if b0 <= bar < b0 + window_bars and abs(off) >= 0.005 and margin > best_m:
+                best_m, best_o = margin, off
+        per_beat[i] = best_o
+    grid.beat_times = grid.beat_times + per_beat

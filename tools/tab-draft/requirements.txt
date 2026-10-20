@@ -1,0 +1,17 @@
+# tools/tab-draft — Python 3.12 가상환경(~/.venvs/tab) 용. 설치 순서는 README 참고.
+# basic-pitch는 의존성 선언이 3.12와 맞지 않아 --no-deps 로 설치하고 아래를 직접 넣는다.
+basic-pitch==0.4.0
+coremltools>=8
+numpy<2.3
+scipy
+librosa
+pretty_midi
+resampy>=0.2.2,<0.4.3
+scikit-learn
+mir-eval
+typing-extensions
+setuptools<81        # resampy 0.4.2가 pkg_resources를 쓴다
+soundfile
+pyguitarpro>=0.10
+mido
+onnxruntime          # CoreML이 안 될 때 대체 백엔드
