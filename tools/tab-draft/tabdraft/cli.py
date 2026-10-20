@@ -11,7 +11,7 @@ HERE = Path(__file__).resolve().parent.parent          # tools/tab-draft
 sys.path.insert(0, str(HERE.parent))                   # tools/ → common 패키지
 
 from common.audio import load_audio, write_wav, duration_of, measure_lag, shift_audio   # noqa: E402
-from common.beats import track_beats, estimate_feel           # noqa: E402
+from common.beats import track_beats, estimate_feel, estimate_local_offsets, apply_local_offsets  # noqa: E402
 from .analyze import analyze, describe                        # noqa: E402
 from .fingering import assign_fingering                       # noqa: E402
 from .melody import clean                                     # noqa: E402
@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="멜로디가 비트보다 늦게/빠르게 연주될 때 격자를 옮김(ms, 양수 = 연주가 늦음). auto = 멜로디로 추정")
     p.add_argument("--swing", choices=["auto", "on", "off"], default="auto",
                    help="스윙 격자(뒷박 8분음표 = 박의 2/3). auto = 뒷박 위치로 감지")
+    p.add_argument("--phrase-offset", choices=["on", "off"], default="on",
+                   help="프레이즈 단위로 오프셋을 따로 추정해 격자에 반영(기본 on)")
+    p.add_argument("--phrase-bars", type=int, default=3, help="프레이즈 창 길이(마디, 기본 3; 1마디씩 이동)")
     return p
 
 
@@ -148,7 +151,7 @@ def main(argv=None) -> int:
     # 느낌(오프셋·스윙) 추정: 멜로디 한 줄을 미리 뽑아 그 음 시작으로 계산
     lo_tmp, hi_tmp = open_midis[0] + args.capo, open_midis[-1] + cfg["fingering"]["max_fret"]
     pre, _ = clean(raw, cfg, "top", grid, lo_tmp, hi_tmp, cfg["clean"]["low_conf"], do_quantize=False)
-    feel = estimate_feel([(n.start, n.conf * min(n.dur, 0.5)) for n in pre if n.dur >= 0.12], grid)
+    feel = estimate_feel([(n.start, n.conf * min(n.dur, 0.5), n.dur) for n in pre if n.dur >= 0.12], grid)
     if args.grid_offset == "auto":
         goff = feel["offset"]
     else:
@@ -159,6 +162,18 @@ def main(argv=None) -> int:
     grid.swing = feel["swing"] if args.swing == "auto" else (args.swing == "on")
     medtxt = f"{feel['offbeat_median']:.2f}" if feel["offbeat_median"] is not None else "-"
     grid.notes.append(f"{'스윙' if grid.swing else '직선'} 격자 (보정 후 뒷박 음 중앙값 위치 {medtxt}; 0.5 = 직선, 0.67 = 스윙)")
+    if args.phrase_offset == "on":
+        onsets = [(n.start, n.conf * min(n.dur, 0.5), n.dur) for n in pre if n.dur >= 0.12]
+        local = estimate_local_offsets(onsets, grid, grid.swing, goff, window_bars=args.phrase_bars,
+                                       hop_bars=max(1, args.phrase_bars // 2))
+        apply_local_offsets(grid, local, args.phrase_bars)
+        hop = max(1, args.phrase_bars // 2)
+        acc = [(b0 + 1, o, m) for _, o, _, b0, m in local if abs(o) >= 0.005]
+        if acc:
+            grid.notes.append(f"프레이즈 오프셋(전체 대비, 채택된 창만; 창 {args.phrase_bars}마디): "
+                              + " ".join(f"{b}~{b + args.phrase_bars - 1}마디 {o * 1000:+.0f}ms(우위 {m:.2f})" for b, o, m in acc))
+        else:
+            grid.notes.append("프레이즈 오프셋: 근거가 확실한 창 없음(전체 오프셋만 적용)")
     n_bars = grid.bar_count(seg_dur)
     print(f"④ 박자: {grid.bpm:.1f} BPM ({grid.source}), {n_bars}마디")
     for s in grid.notes:

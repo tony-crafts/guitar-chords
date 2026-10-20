@@ -66,6 +66,8 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 | `--bar-offset N` | 첫 마디 위치가 틀렸을 때 박 단위로 보정 |
 | `--grid-offset auto\|N` | 멜로디가 비트보다 늦게/빠르게 연주될 때 격자를 N ms 옮김(양수 = 연주가 늦음). 기본 auto = 멜로디 음 시작으로 추정 |
 | `--swing auto\|on\|off` | 스윙 격자(뒷박 8분음표 = 박의 2/3 지점). 기본 auto = 뒷박 위치 분포로 감지 |
+| `--phrase-offset on\|off` | 프레이즈(창) 단위로 오프셋을 따로 추정해 격자에 반영(기본 on). 근거가 확실한 창만 채택 |
+| `--phrase-bars N` | 프레이즈 창 길이(마디, 기본 3; 1마디씩 이동) |
 | `--position N` | 선호 포지션(프렛). 그 근처 운지에 가산점 |
 | `--mode auto\|top\|poly\|both` | 멜로디 한 줄 / 동시 음 유지 / 둘 다 (기본 auto = 음원 성격으로 결정) |
 | `--pick highest\|loudest` | top 모드에서 멜로디 고르는 기준 |
@@ -91,6 +93,7 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 - 터미널에 찍히는 `③ 음원 성격 판단`을 먼저 본다. 판단이 틀렸으면 `--mode`, `--ghost-ratio`로 바로잡는다.
 - `④ 박자`의 첫 마디 시작 시각이 틀리면 `--bar-offset` 또는 `--bpm`으로 보정.
 - `④ 박자`에 `격자 오프셋 +140ms`, `스윙 격자`처럼 나오면 멜로디가 반주 비트보다 뒤에서(laid-back) 스윙으로 연주된다고 판단한 것. 틀리면 `--grid-offset 0`, `--swing off`.
+- `프레이즈 오프셋 … 19~21마디 -195ms(우위 0.45)`는 그 프레이즈만 전체와 다르게(여기선 제때) 쳤다고 본 것. "우위"는 0 대비 점수 이득(0.3 이상만 채택). 혼합 wav로 그 구간을 들어 보고 아니면 `--phrase-offset off`.
 - 멜로디 한 줄(top) 모드에서 반주 음이 섞여 들어오면 `weights.toml`의 `top_conf_min`(기본 0.5)을 올리고, 멜로디가 빠지면 내린다.
 - `*.mix.wav`를 들으면서 틀린 음을 찾고 GP5/MusicXML에서 고친다.
 - 합성 음이 원곡보다 늦게 들리면: 실행 끝의 `확인: 합성 음이 원본보다 ±Nms`를 보고 `weights.toml`의 `[synth] lead_ms`를 올린다(기본 0, 격자가 멜로디 음 시작에 자동으로 맞춰지므로 보통 0으로 충분).

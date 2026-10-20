@@ -163,12 +163,14 @@ def estimate_feel(onsets: list[tuple[float, float]], grid: BeatGrid,
     """
     if len(onsets) < 8:
         return {"offset": 0.0, "swing": False, "offbeat_median": None, "n": len(onsets), "score": 0.0}
-    ts = np.array([t for t, _ in onsets]); ws = np.array([w for _, w in onsets])
+    ts = np.array([o[0] for o in onsets]); ws = np.array([o[1] for o in onsets])
+    durs = np.array([o[2] if len(o) > 2 else 0.0 for o in onsets])
     base = np.array([grid.beat_pos(t) for t in ts])
     beat = 60.0 / grid.bpm
-    hyps = {"straight": (0.5, 0.7), "swing": (2 / 3, 0.7)}
+    w_off = _offbeat_weight(durs, beat)
+    hyps = {"straight": 0.5, "swing": 2 / 3}
     best = (-np.inf, 0.0, "straight")
-    for name, (p_off, w_off) in hyps.items():
+    for name, p_off in hyps.items():
         for off in np.arange(-max_offset, max_offset + 1e-9, 0.005):
             fr = (base - off / beat) % 1.0
             sc_on = np.cos(2 * np.pi * fr)
@@ -181,3 +183,71 @@ def estimate_feel(onsets: list[tuple[float, float]], grid: BeatGrid,
     offb = fr[(fr > 0.3) & (fr < 0.95)]
     med = float(np.median(offb)) if len(offb) >= 8 else None
     return {"offset": off, "swing": name == "swing", "offbeat_median": med, "n": len(ts), "score": sc}
+
+
+def _offbeat_weight(durs: np.ndarray, beat: float) -> np.ndarray:
+    """뒷박 가설 가중: 짧은 음 0.7, 한 박 길이의 70% 이상 울리는 긴 음(4분음표급)은 0.35 — 긴 음은 정박일 가능성이 높다."""
+    return np.where(durs >= 0.7 * beat, 0.35, 0.7)
+
+
+def _feel_score(fr: np.ndarray, ws: np.ndarray, w_off: np.ndarray, swing: bool) -> float:
+    p_off = 2 / 3 if swing else 0.5
+    return float(np.sum(ws * np.maximum(np.cos(2 * np.pi * fr), w_off * np.cos(2 * np.pi * (fr - p_off)))))
+
+
+def estimate_local_offsets(onsets: list[tuple[float, float]], grid: BeatGrid, swing: bool,
+                           global_offset: float, window_bars: int = 4, hop_bars: int = 2,
+                           max_dev: float = 0.25, min_notes: int = 5, min_margin: float = 0.3) -> list[tuple[float, float, int]]:
+    """프레이즈 단위 오프셋. 전체 오프셋(global_offset)이 이미 격자에 적용된 상태에서 호출한다.
+
+    window_bars 길이 창을 hop_bars씩 옮기며 창 안 음들로 오프셋(전체 대비 ±max_dev 초)을 추정한다.
+    근거가 확실한 창만 채택한다: 음이 min_notes 이상이고, 최적 오프셋의 점수가 0일 때보다
+    (가중합 대비) min_margin 이상 높을 때. 나머지 창은 0(= 전체 오프셋 유지).
+    반환: [(창 중심 시각, 추가 오프셋 초, 음 수, 시작 마디, 우위)]
+    """
+    if not onsets:
+        return []
+    ts = np.array([o[0] for o in onsets]); ws = np.array([o[1] for o in onsets])
+    durs = np.array([o[2] if len(o) > 2 else 0.0 for o in onsets])
+    bp = np.array([grid.beat_pos(t) for t in ts])
+    bpb = grid.beats_per_bar
+    beat = 60.0 / grid.bpm
+    w_off_all = _offbeat_weight(durs, beat)
+    window_bars_ = window_bars
+    last_bar = int(np.floor(bp.max() / bpb)) + 1
+    out = []
+    for b0 in range(0, last_bar, hop_bars):
+        sel = (bp >= b0 * bpb) & (bp < (b0 + window_bars) * bpb)
+        center = grid.time_of_beat((b0 + window_bars / 2) * bpb)
+        if sel.sum() < min_notes:
+            out.append((center, 0.0, int(sel.sum()), b0, 0.0))
+            continue
+        s0 = _feel_score(bp[sel] % 1.0, ws[sel], w_off_all[sel], swing)
+        best, best_s = 0.0, -np.inf
+        for off in np.arange(-max_dev, max_dev + 1e-9, 0.005):
+            fr = (bp[sel] - off / beat) % 1.0
+            sc = _feel_score(fr, ws[sel], w_off_all[sel], swing)
+            if sc > best_s:
+                best, best_s = float(off), sc
+        margin = (best_s - s0) / ws[sel].sum()
+        at_edge = abs(best) >= max_dev - 0.0051          # 탐색 범위 끝에 걸린 값은 믿지 않는다
+        out.append((center, best if (margin >= min_margin and not at_edge) else 0.0, int(sel.sum()), b0, float(margin)))
+    return out
+
+
+def apply_local_offsets(grid: BeatGrid, local: list, window_bars: int) -> None:
+    """마디마다 그 마디를 덮는 창 중 근거(우위)가 가장 강한 창의 오프셋을 그대로 쓴다(계단식).
+    프레이즈 사이에서 값이 바뀌므로 경계 박 하나가 늘거나 줄지만, 보간으로 희석되는 것보다 낫다."""
+    if not local:
+        return
+    bpb = grid.beats_per_bar
+    n_beats = len(grid.beat_times)
+    per_beat = np.zeros(n_beats)
+    for i in range(n_beats):
+        bar = (i - grid.downbeat_phase) // bpb
+        best_m, best_o = -1.0, 0.0
+        for _, off, n, b0, margin in local:
+            if b0 <= bar < b0 + window_bars and abs(off) >= 0.005 and margin > best_m:
+                best_m, best_o = margin, off
+        per_beat[i] = best_o
+    grid.beat_times = grid.beat_times + per_beat
