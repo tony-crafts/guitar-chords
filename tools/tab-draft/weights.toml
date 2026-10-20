@@ -1,0 +1,45 @@
+# tab-draft 설정 — 벌점(가중치)과 정리 기준값. 숫자를 바꾸고 다시 돌리면 결과가 바뀐다.
+# CLI 옵션(--ghost-ratio 등)이 있으면 그 값이 여기보다 우선한다.
+
+[clean]
+conf_min       = 0.25   # 이보다 신뢰도(진폭) 낮은 음은 버림
+low_conf       = 0.4    # 이보다 낮으면 타브에 괄호로 표시
+min_note_ms    = 60     # 이보다 짧은 음은 버림(옵션 --min-note-ms)
+merge_gap_ms   = 80     # 같은 음이 이만큼 이내로 끊겼다 이어지면 한 음으로 합침
+vibrato_ms     = 130    # 이보다 짧고 바로 옆 음과 반음~온음 차이면 비브라토/꺾기로 보고 흡수
+chord_window_ms = 50    # 이 안에 시작한 음들은 '동시에 친 음'으로 묶음
+ghost_ratio    = 0.6    # 배음 자리(옥타브·12도·2옥타브…)의 음이 기본음 신뢰도 × 이 값보다 약하면 가짜로 봄
+                        # 디스토션이면 0.85 정도로 올려 더 엄격하게 (옵션 --ghost-ratio)
+max_voices     = 6      # 동시 음 유지 모드에서 한 순간 최대 음 수
+
+[melody]
+# top 모드(가장 높은 음 = 멜로디): 점수 = w_pitch×(상대 음높이) + w_conf×신뢰도 + w_cont×(이전 음과의 거리 벌점)
+[melody.highest]
+w_pitch = 1.0
+w_conf  = 0.3
+w_cont  = 0.2
+# 단선율용(가장 크고 이어지는 음 우선)
+[melody.loudest]
+w_pitch = 0.1
+w_conf  = 1.0
+w_cont  = 0.5
+
+[fingering]
+max_fret     = 22
+w_fret       = 0.08  # 프렛 높이 벌점(프렛당)
+w_open       = -0.2  # 개방현 보너스(음수 = 선호). 재즈처럼 개방현을 피하려면 양수로
+w_move       = 0.5   # 손 위치 이동 거리(프렛당)
+w_shift      = 1.5   # 포지션(손가락 4개 폭) 밖으로 나가는 이동에 추가 벌점
+span         = 4     # 한 포지션 폭(프렛 수). 이 안이면 '같은 포지션'
+chord_span   = 4     # 동시 음에서 허용하는 프렛 폭(이상이면 잡기 어려움 표시; 5까지 벌점 받고 허용)
+w_string     = 0.3   # 줄 건너뛰기 벌점(건너뛴 줄 수당)
+w_pos        = 0.25  # --position 선호 프렛과의 거리 벌점(프렛당)
+fast_gap_s   = 0.2   # 이보다 빠른 연속 음은 이동 벌점을 fast_mult 배
+fast_mult    = 1.6
+max_candidates = 40  # 동시 음 운지 후보 가지치기 수
+
+[synth]
+decay      = 0.996   # 합성 기타 소리 감쇠(1에 가까울수록 길게 울림)
+gain       = 0.8
+mix_original = 0.45  # 혼합 wav에서 원곡 볼륨
+mix_synth    = 0.9   # 혼합 wav에서 합성 볼륨

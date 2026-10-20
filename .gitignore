@@ -1,1 +1,10 @@
 .DS_Store
+
+# 음원·타브 산출물은 커밋하지 않음
+tools/tab-draft/out/
+tools/tab-draft/samples/
+*.mp3
+*.wav
+*.m4a
+*.flac
+__pycache__/
