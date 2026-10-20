@@ -3,6 +3,9 @@
 
     ~/.venvs/tab/bin/python tools/tab-draft/evaluate.py out/<이름>/top.json 정답.txt [--tol 2] [--shift auto|N]
 
+정답 파일을 처음부터 쓰기 번거로우면 초안에서 템플릿을 뽑아 틀린 줄만 고친다:
+    ~/.venvs/tab/bin/python tools/tab-draft/evaluate.py out/<이름>/top.json --make-template > 정답.txt
+
 정답 파일 형식(한 줄 = 음 하나, # 뒤는 주석):
     마디  박[.16분]  줄  프렛
     1     1         2   11      # 1마디 1박 첫 16분, 2번줄 11프렛
@@ -92,7 +95,8 @@ def match(refs: list[dict], draft: list[dict], tol: int, shift: int) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("draft_json")
-    ap.add_argument("reference")
+    ap.add_argument("reference", nargs="?")
+    ap.add_argument("--make-template", action="store_true", help="초안을 정답 파일 형식으로 출력(고쳐서 정답으로 사용)")
     ap.add_argument("--tol", type=int, default=2, help="박자 허용 오차(16분음표 수, 기본 2)")
     ap.add_argument("--shift", default="auto", help="초안 격자가 정답보다 몇 16분 밀렸는지. auto면 -16~16 중 최적을 찾음")
     args = ap.parse_args()
@@ -100,6 +104,14 @@ def main() -> int:
     draft, meta = load_draft(Path(args.draft_json))
     open_midis = parse_tuning(meta["tuning"])
     sub = meta["beats_per_bar"] * 4
+    if args.make_template:
+        print(f"# {meta['name']} [{meta['mode']}] 초안에서 만든 정답 템플릿 — 틀린 줄을 고치고, 없는 음은 줄을 추가, 가짜 음은 줄을 지운다")
+        print("# 마디 박.16분 줄 프렛   (# 뒤는 주석: 음이름, 신뢰도)")
+        for n in draft:
+            print(f"{n['bar'] + 1:<3} {n['t16'] // 4 + 1}.{n['t16'] % 4 + 1}  {n['string']} {n['fret']:<2}   # {midi_name(n['midi'])} conf {n['conf']:.2f}")
+        return 0
+    if not args.reference:
+        ap.error("정답 파일이 필요합니다 (또는 --make-template)")
     refs = load_ref(Path(args.reference), open_midis, meta["capo"], sub)
     if not refs:
         print("정답 파일에 음이 없습니다"); return 1
