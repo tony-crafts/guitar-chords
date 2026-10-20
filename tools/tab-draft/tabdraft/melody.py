@@ -70,8 +70,10 @@ def absorb_vibrato(notes: list[Note], vib: float, gap: float) -> tuple[list[Note
             for m in notes:
                 if m is n or abs(m.midi - n.midi) > 2 or m.midi == n.midi or m.dur <= n.dur:
                     continue
-                adjacent = (abs(m.end - n.start) < gap) or (abs(n.end - m.start) < gap) or (m.start <= n.start < m.end)
-                if adjacent and (best is None or m.dur > best.dur):
+                inside = m.start < n.start and n.end < m.end + gap            # 긴 음 안에서 잠깐 흔들림
+                returns = (abs(m.end - n.start) < gap and any(                 # 긴 음 → 짧은 음 → 다시 같은 음
+                    k is not n and k.midi == m.midi and abs(k.start - n.end) < gap for k in notes))
+                if (inside or returns) and (best is None or m.dur > best.dur):
                     best = m
             if best is not None:
                 best.start = min(best.start, n.start)
@@ -88,6 +90,8 @@ def _score(n: Note, prev_midi: int | None, lo: int, w: dict) -> float:
     s = w["w_pitch"] * (n.midi - lo) / 12.0 + w["w_conf"] * n.conf
     if prev_midi is not None:
         s -= w["w_cont"] * abs(n.midi - prev_midi) / 12.0
+    if n.stem_ratio >= 0:                       # 스템 게이트(soft): 기타 쪽 음에 가산, 반주 쪽 음에 감점
+        s += w.get("w_stem", 1.0) * (n.stem_ratio - 0.5)
     return s
 
 
@@ -105,7 +109,8 @@ def pick_melody(notes: list[Note], window: float, weights: dict) -> tuple[list[N
         if sustaining:
             cands.append(prev)
         prev_midi = (melody[-2].midi if sustaining and len(melody) > 1 else (prev.midi if prev else None))
-        best = max(cands, key=lambda n: _score(n, prev_midi, lo, weights))
+        pen = weights.get("w_sustain", 0.4)
+        best = max(cands, key=lambda n: _score(n, prev_midi, lo, weights) - (pen if n is prev else 0.0))
         if best is prev:               # 울리던 음이 이김 → 이 그룹은 반주로 보고 버림
             dropped += len(g)
             continue

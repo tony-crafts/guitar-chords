@@ -49,6 +49,7 @@ class Note:
     string: int = 0           # 1 = 1번줄(높은 E) … 6
     fret: int = -1
     oct_shift: int = 0        # 음역 밖이라 옮긴 옥타브 수
+    stem_ratio: float = -1.0  # 스템 게이트: 기타 에너지 비율(0~1), -1 = 검사 안 함
     flags: list[str] = field(default_factory=list)   # 'low_conf' 'merged' 'vibrato' 'unplayable' …
 
     @property

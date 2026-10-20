@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="top 모드에서 멜로디 고르는 기준(기본: 단선율이면 loudest, 다성이면 highest)")
     p.add_argument("--stems", type=Path, default=None, help="기존 Demucs 분리 폴더 재사용")
     p.add_argument("--no-separate", action="store_true", help="음원 분리 건너뜀(기타 단독 녹음 등)")
+    p.add_argument("--stem-gate", choices=["off", "auto", "soft", "hard"], default="off",
+                   help="믹스에서 음을 뽑고 기타/나머지 스템 에너지 비율로 반주를 가려냄(실험 기능, 기본 off). "
+                        "soft = 멜로디 선택에서 감점만, hard = 기준 미만 음 제거, auto = 스템이 있거나 분리할 때 soft")
+    p.add_argument("--gate-ratio", type=float, default=0.5, help="스템 게이트 기준: 기타 에너지 비율 최소값(기본 0.5, 높을수록 엄격)")
     p.add_argument("--device", default="mps", help="Demucs 장치 mps|cpu")
     p.add_argument("--weights", type=Path, default=HERE / "weights.toml")
     p.add_argument("--out", type=Path, default=None, help="출력 폴더(기본 tools/tab-draft/out/<이름>)")
@@ -86,21 +90,38 @@ def main(argv=None) -> int:
     print(f"▶ {audio.name}  구간 {args.start:.1f}~{end:.1f}s  source={args.source}  tuning={args.tuning} capo={args.capo}")
 
     # 1. 분리
+    #   스템 게이트(기본): 믹스에서 음을 뽑고 기타/나머지 스템 에너지로 반주를 걸러낸다 → 6스템 전부 필요
+    #   게이트 off: 예전 방식(대상 스템에서 바로 음 추출)
+    from .separate import find_stem, find_all_stems, separate, separate_all
     src = audio
+    stems: dict = {}
+    gate = args.stem_gate
     if args.stems:
-        from .separate import find_stem
-        found = find_stem(args.stems, args.source)
-        if not found:
-            print(f"--stems 폴더에서 {args.source} 트랙을 못 찾음: {args.stems}", file=sys.stderr); return 1
-        src = found
-        print(f"① 분리: 기존 스템 재사용 → {src}")
-    elif args.no_separate:
-        print("① 분리: 건너뜀 (--no-separate)")
-    else:
-        from .separate import separate
-        print(f"① 분리: Demucs ({args.source})")
-        src = separate(audio, args.source, out / "stems", device=args.device)
-        print(f"   분리 트랙 → {src}")
+        stems = find_all_stems(args.stems)
+    if gate == "auto":
+        gate = "off" if (args.no_separate and not args.stems) else "soft"
+    if gate in ("soft", "hard") and args.source == "guitar":
+        if "guitar" not in stems or not any(k in stems for k in ("piano", "other", "bass")):
+            if args.no_separate:
+                print("① 분리: 스템이 없어 게이트를 끕니다 (--stems 로 폴더를 주거나 --no-separate 를 빼세요)"); gate = "off"
+            else:
+                print("① 분리: Demucs 6스템 (스템 게이트용)")
+                stems = separate_all(audio, out / "stems", device=args.device)
+        if gate in ("soft", "hard"):
+            print(f"① 음은 믹스에서 뽑고, 기타 스템 vs {'+'.join(k for k in stems if k not in ('guitar', 'drums'))} 스템 에너지로 반주를 가려냄 ({gate}, 기준 {args.gate_ratio})")
+    if gate not in ("soft", "hard"):
+        if args.stems:
+            found = find_stem(args.stems, args.source)
+            if not found:
+                print(f"--stems 폴더에서 {args.source} 트랙을 못 찾음: {args.stems}", file=sys.stderr); return 1
+            src = found
+            print(f"① 분리: 기존 스템 재사용 → {src}")
+        elif args.no_separate:
+            print("① 분리: 건너뜀 (--no-separate)")
+        else:
+            print(f"① 분리: Demucs ({args.source})")
+            src = separate(audio, args.source, out / "stems", device=args.device)
+            print(f"   분리 트랙 → {src}")
 
     # 구간 자르기
     y, sr = load_audio(src, sr=SR, start=args.start, end=end)
@@ -123,6 +144,24 @@ def main(argv=None) -> int:
     raw, backend = transcribe(seg_wav, onset_threshold=args.onset_threshold, frame_threshold=args.frame_threshold,
                               min_note_ms=min(cfg["clean"]["min_note_ms"], 60), midi_out=out / "notes_raw.mid")
     print(f" ({backend}) → 음 {len(raw)}개")
+    gate_stats = None
+    if gate in ("soft", "hard") and args.source == "guitar":
+        from .stemgate import gate_notes
+        g = load_audio(stems["guitar"], sr=SR, start=args.start, end=end)[0]
+        lag, cor = measure_lag(y_orig, g, sr)
+        others = None
+        for k, pth in stems.items():
+            if k in ("guitar", "drums"):
+                continue
+            o = load_audio(pth, sr=SR, start=args.start, end=end)[0]
+            others = o if others is None else others[: len(o)] + o[: len(others)]
+        if abs(lag) >= 0.002 and cor > 0.3:
+            g = shift_audio(g, lag, sr); others = shift_audio(others, lag, sr)
+        raw, gate_stats = gate_notes(raw, g, others, sr, ratio_min=args.gate_ratio, mode=gate)
+        if gate == "hard":
+            print(f"   스템 게이트(hard): {gate_stats['input']}개 중 반주로 판정 {gate_stats['dropped_accomp']}개 제거, 판단 보류 {gate_stats['unsure']}개 → {gate_stats['kept']}개")
+        else:
+            print(f"   스템 게이트(soft): {gate_stats['input']}개 중 반주 쪽(비율<{args.gate_ratio}) {gate_stats['low_ratio_kept']}개는 멜로디 선택에서 감점, 판단 보류 {gate_stats['unsure']}개")
 
     # 3. 음원 성격
     an = analyze(y, sr, raw)
@@ -206,7 +245,7 @@ def main(argv=None) -> int:
         data = {"name": name, "mode": m, "source": args.source, "start": args.start, "end": end,
                 "bpm": grid.bpm, "beats_per_bar": grid.beats_per_bar, "beat_source": grid.source, "swing": grid.swing,
                 "bar_start_s": grid.time_of(0, 0) - cfg["synth"].get("lead_ms", 0) / 1000, "tuning": args.tuning, "capo": args.capo,
-                "n_bars": n_bars, "clean_stats": st, "fingering_stats": fs,
+                "n_bars": n_bars, "clean_stats": st, "fingering_stats": fs, "gate_stats": gate_stats,
                 "bars": [{"n": b + 1, "notes": [n.to_dict() for n in notes if n.bar == b]} for b in range(n_bars)]}
         with open(out / f"{m}.json", "w") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

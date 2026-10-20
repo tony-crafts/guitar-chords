@@ -38,3 +38,36 @@ def separate(audio: Path, source: str, out_dir: Path, device: str = "mps") -> Pa
     if not result.exists():
         raise SystemExit(f"분리 결과가 없습니다: {result}")
     return result
+
+
+STEM_NAMES = {"guitar": ["guitar", "3-기타"], "piano": ["piano"], "bass": ["bass", "2-베이스"],
+              "vocals": ["vocals"], "other": ["other", "4-보컬외"], "drums": ["drums", "1-드럼"]}
+
+
+def find_all_stems(stems_dir: Path) -> dict[str, Path]:
+    """폴더(또는 하위)에서 스템 파일을 이름으로 찾는다. demucs 출력·make-stems 4트랙 모두 지원."""
+    found: dict[str, Path] = {}
+    for p in sorted(stems_dir.rglob("*")):
+        if p.suffix.lower() not in (".wav", ".mp3", ".flac"):
+            continue
+        for key, names in STEM_NAMES.items():
+            if p.stem in names and key not in found:
+                found[key] = p
+    return found
+
+
+def separate_all(audio: Path, out_dir: Path, device: str = "mps") -> dict[str, Path]:
+    """htdemucs_6s 로 6스템 전부 분리(스템 게이트용). 이미 있으면 재사용."""
+    model = "htdemucs_6s"
+    target = out_dir / model / audio.stem
+    if (target / "guitar.mp3").exists() and (target / "piano.mp3").exists():
+        return find_all_stems(target)
+    venv = Path(os.environ.get("DEMUCS_VENV", Path.home() / ".venvs" / "demucs"))
+    demucs = venv / "bin" / "demucs"
+    if not demucs.exists():
+        raise SystemExit(f"Demucs 가상환경이 없습니다: {venv}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(demucs), "-n", model, "-d", device, "--mp3", "--mp3-bitrate", "320", "-o", str(out_dir), str(audio)]
+    print("  $", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    return find_all_stems(target)
