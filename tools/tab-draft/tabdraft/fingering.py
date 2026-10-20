@@ -185,4 +185,7 @@ def suggest_position(notes: list[Note], open_midis: list[int], capo: int, w: dic
         fs = assign_fingering(trial, open_midis, capo, w, position=p, grid=grid)
         results.append((p, fs["total_cost"]))
     results.sort(key=lambda x: (x[1], x[0]))
-    return results[0][0], results
+    # 비용이 거의 같은(1% 이내) 후보가 여럿이면 낮은 포지션을 고른다 — 같은 손 범위면 낮은 쪽이 보통 편하다
+    best_cost = results[0][1]
+    near = [p for p, c in results if c <= best_cost * 1.01]
+    return min(near), results

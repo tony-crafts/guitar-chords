@@ -41,11 +41,14 @@ def remove_ghosts(notes: list[Note], ratio: float, window: float) -> tuple[list[
     return keep, removed
 
 
-def merge_same_pitch(notes: list[Note], gap: float) -> tuple[list[Note], int]:
+def merge_same_pitch(notes: list[Note], gap: float, min_gap: float = 0.015) -> tuple[list[Note], int]:
+    """끊긴 같은 음 합치기. 두 음 사이에 짧은 무음(min_gap~gap)이 있을 때만 합친다.
+    간격이 0(앞 음 끝 = 뒷 음 시작)이면 Basic Pitch가 재타격으로 나눈 것이므로 그대로 둔다."""
     out: list[Note] = []
     merged = 0
     for n in sorted(notes, key=lambda x: (x.midi, x.start)):
-        if out and out[-1].midi == n.midi and n.start - out[-1].end < gap:
+        g = n.start - out[-1].end if out else None
+        if out and out[-1].midi == n.midi and min_gap <= g < gap and "reattack" not in n.flags:
             out[-1].end = max(out[-1].end, n.end)
             out[-1].conf = max(out[-1].conf, n.conf)
             out[-1].flags.append("merged")

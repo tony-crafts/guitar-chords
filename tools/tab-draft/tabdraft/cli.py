@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--conf-min", type=float, default=None)
     p.add_argument("--onset-threshold", type=float, default=0.5, help="Basic Pitch 음 시작 민감도(낮을수록 많이 잡음)")
     p.add_argument("--frame-threshold", type=float, default=0.3)
+    p.add_argument("--reattack", type=float, default=0.0,
+                   help="실험: 음이 울리는 동안 음 시작 확률이 이 값 이상인 봉우리에서 음을 쪼갬(예: 0.6). 가짜 분리가 많아 기본 0 = 끔")
     p.add_argument("--max-fret", type=int, default=None)
     p.add_argument("--offset-ms", type=float, default=0.0,
                    help="음원을 N ms 앞당겨 읽음(분리 트랙이 원곡과 어긋날 때). 보통은 --grid-offset 를 쓴다")
@@ -142,7 +144,8 @@ def main(argv=None) -> int:
     # 2. 음 추출
     print("② 음 추출: Basic Pitch", end="", flush=True)
     raw, backend = transcribe(seg_wav, onset_threshold=args.onset_threshold, frame_threshold=args.frame_threshold,
-                              min_note_ms=min(cfg["clean"]["min_note_ms"], 60), midi_out=out / "notes_raw.mid")
+                              min_note_ms=min(cfg["clean"]["min_note_ms"], 60), midi_out=out / "notes_raw.mid",
+                              reattack_threshold=args.reattack)
     print(f" ({backend}) → 음 {len(raw)}개")
     gate_stats = None
     if gate in ("soft", "hard") and args.source == "guitar":
