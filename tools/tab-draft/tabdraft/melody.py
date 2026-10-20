@@ -31,7 +31,8 @@ def remove_ghosts(notes: list[Note], ratio: float, window: float) -> tuple[list[
                 continue
             same_onset = abs(a.start - b.start) < window
             inside = a.start < b.start < a.end and b.dur < 0.15
-            if (same_onset or inside) and b.conf < ratio * a.conf:
+            outlives = b.end > a.end + 0.3 * max(a.dur, 0.1)     # 기본음이 끝난 뒤에도 한참 울리면 배음이 아니라 독립된 음
+            if (same_onset or inside) and b.conf < ratio * a.conf and not outlives:
                 ghost = True
                 break
         if ghost:

@@ -30,15 +30,20 @@ def _polyphony_stats(notes: list[Note], chord_window: float = 0.05) -> dict:
 
 
 def _timbre_stats(y: np.ndarray, sr: int) -> dict:
+    """음색 지표. 디스토션은 2kHz 이상 에너지 비율(hf2k)로 가장 잘 갈린다
+    (측정: 디스토션 기타 스템 0.31, 디스토션 밴드 믹스 0.11~0.18 / 클린 재즈 0.007~0.026).
+    스펙트럼 평탄도는 디스토션에서 오히려 낮아져(배음이 뚜렷한 선 스펙트럼) 판정에 쓰지 않고 참고로만 낸다."""
     import librosa
     y = y[: sr * 60]   # 길어도 60초만
-    S = np.abs(librosa.stft(y, n_fft=2048, hop_length=512)) ** 2
+    M = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))      # 크기 스펙트럼(평탄도는 크기 기준이어야 함)
+    P = M ** 2
     freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
-    total = S.sum() + 1e-9
-    hf_ratio = float(S[freqs >= 4000].sum() / total)          # 4kHz 이상 에너지 비율
-    flat = float(np.mean(librosa.feature.spectral_flatness(S=S)))
-    cent = float(np.mean(librosa.feature.spectral_centroid(S=S, sr=sr)))
-    # 크레스트 팩터(피크/RMS, dB): 디스토션·컴프레션이 세면 낮아진다
+    total = P.sum() + 1e-9
+    hf2k = float(P[freqs >= 2000].sum() / total)
+    hf4k = float(P[freqs >= 4000].sum() / total)
+    flat = float(np.mean(librosa.feature.spectral_flatness(S=M)))
+    cent = float(np.mean(librosa.feature.spectral_centroid(S=M, sr=sr)))
+    roll = float(np.median(librosa.feature.spectral_rolloff(S=M, sr=sr, roll_percent=0.95)))
     frame = sr // 2
     crests = []
     for i in range(0, len(y) - frame, frame):
@@ -47,11 +52,10 @@ def _timbre_stats(y: np.ndarray, sr: int) -> dict:
         if rms > 1e-3:
             crests.append(20 * np.log10(np.max(np.abs(seg)) / rms))
     crest = float(np.median(crests)) if crests else 0.0
-    # 어택 날카로움: 온셋 세기 분포의 첨도(어쿠스틱 핑거/피킹은 트랜지언트가 뚜렷)
     oenv = librosa.onset.onset_strength(y=y, sr=sr)
-    onset_peakiness = float(np.percentile(oenv, 99) / (np.mean(oenv) + 1e-9))
-    return {"hf_ratio": round(hf_ratio, 4), "flatness": round(flat, 4), "centroid_hz": round(cent),
-            "crest_db": round(crest, 1), "onset_peakiness": round(onset_peakiness, 1)}
+    onset_peakiness = float(np.percentile(oenv, 99) / (np.mean(oenv) + 1e-9))   # 어택이 뚜렷할수록 큼(디스토션 서스테인은 작음)
+    return {"hf2k": round(hf2k, 3), "hf4k": round(hf4k, 3), "flatness": round(flat, 4), "centroid_hz": round(cent),
+            "rolloff95_hz": round(roll), "crest_db": round(crest, 1), "onset_peakiness": round(onset_peakiness, 1)}
 
 
 def analyze(y: np.ndarray, sr: int, notes: list[Note]) -> dict:
@@ -66,29 +70,24 @@ def analyze(y: np.ndarray, sr: int, notes: list[Note]) -> dict:
     else:
         texture, texture_conf = "poly", "높음"
 
-    # ③ 디스토션 / 클린 일렉 / 어쿠스틱
-    dist_score = 0
-    dist_score += t["crest_db"] < 11
-    dist_score += t["flatness"] > 0.02
-    dist_score += t["hf_ratio"] > 0.05
-    if dist_score >= 2:
-        timbre = "electric_distorted"
-    elif t["onset_peakiness"] > 9 and t["centroid_hz"] > 1500:
-        timbre = "acoustic"
+    # ③ 디스토션 / 클린. (어쿠스틱 vs 클린 일렉은 보정할 표본이 없어 구분하지 않는다)
+    if t["hf2k"] >= 0.08:
+        timbre, timbre_conf = "electric_distorted", ("높음" if t["onset_peakiness"] < 7 else "중간")
+    elif t["hf2k"] >= 0.05:
+        timbre, timbre_conf = "electric_distorted", "낮음"
     else:
-        timbre = "electric_clean"
-    timbre_conf = "중간" if dist_score in (1, 2) else "낮음~중간"
+        timbre, timbre_conf = "clean", ("높음" if t["hf2k"] < 0.03 else "중간")
 
     labels = {"mono": "① 단선율 멜로디", "poly": "② 코드+멜로디(핑거스타일/다성)",
-              "electric_distorted": "③ 일렉 — 디스토션 있음", "electric_clean": "③ 일렉(클린) 또는 잔향 많은 어쿠스틱",
-              "acoustic": "③ 어쿠스틱"}
+              "electric_distorted": "③ 디스토션 있음(일렉)", "clean": "③ 클린(일렉 클린 또는 어쿠스틱 — 둘은 구분 안 함)"}
     return {
         "texture": texture, "texture_label": labels[texture], "texture_conf": texture_conf,
         "timbre": timbre, "timbre_label": labels[timbre], "timbre_conf": timbre_conf,
         "metrics": {**p, **t},
         "recommend": {
             "mode": "top" if texture == "mono" else "both",
-            "ghost_ratio": 0.85 if timbre == "electric_distorted" else 0.6,
+            # 디스토션이면 조금 더 엄격하게. (0.85는 용의자 리프 검증에서 멜로디까지 지워 86%→81%로 떨어뜨렸고, 0.7까지는 손실 없음)
+            "ghost_ratio": 0.7 if timbre == "electric_distorted" else 0.6,
         },
     }
 
@@ -97,7 +96,7 @@ def describe(a: dict) -> str:
     m = a["metrics"]
     lines = [
         f"  {a['texture_label']}  (확신 {a['texture_conf']}; 평균 동시음 {m['avg_poly']}, 코드 온셋 비율 {m['chord_onset_ratio']}, 다성 프레임 {m.get('poly_frames_ratio')})",
-        f"  {a['timbre_label']}  (확신 {a['timbre_conf']}; 크레스트 {m['crest_db']}dB, 평탄도 {m['flatness']}, 4kHz↑ {m['hf_ratio']}, 센트로이드 {m['centroid_hz']}Hz, 온셋 첨도 {m['onset_peakiness']})",
+        f"  {a['timbre_label']}  (확신 {a['timbre_conf']}; 2kHz↑ 에너지 {m['hf2k']} [디스토션 ≥0.08], 온셋 첨도 {m['onset_peakiness']}, 센트로이드 {m['centroid_hz']}Hz, 평탄도 {m['flatness']}, 크레스트 {m['crest_db']}dB)",
         f"  → 추천: --mode {a['recommend']['mode']}, --ghost-ratio {a['recommend']['ghost_ratio']}",
     ]
     return "\n".join(lines)
