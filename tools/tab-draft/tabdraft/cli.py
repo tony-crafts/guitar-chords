@@ -13,7 +13,7 @@ sys.path.insert(0, str(HERE.parent))                   # tools/ → common 패�
 from common.audio import load_audio, write_wav, duration_of, measure_lag, shift_audio   # noqa: E402
 from common.beats import track_beats, estimate_feel, estimate_local_offsets, apply_local_offsets  # noqa: E402
 from .analyze import analyze, describe                        # noqa: E402
-from .fingering import assign_fingering                       # noqa: E402
+from .fingering import assign_fingering, suggest_position     # noqa: E402
 from .melody import clean                                     # noqa: E402
 from .model import parse_tuning, NOTE_NAMES                   # noqa: E402
 from .output_gp import write_gp5                              # noqa: E402
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--bpm", type=float, default=None, help="템포를 알면 지정(고정 격자)")
     p.add_argument("--beats-per-bar", type=int, default=4)
     p.add_argument("--bar-offset", type=int, default=0, help="첫 마디 위치를 박 단위로 보정(예: 1이면 한 박 뒤가 1마디 시작)")
-    p.add_argument("--position", type=int, default=None, help="선호 포지션 프렛(예: 5)")
+    p.add_argument("--position", default="auto", help="선호 포지션 프렛(예: 5). auto = 멜로디에 맞춰 자동 제안, none = 선호 없음")
     p.add_argument("--mode", choices=["auto", "top", "poly", "both"], default="auto",
                    help="top=가장 높은 음 한 줄 / poly=동시 음 유지 / both=둘 다 / auto=음원 성격으로 결정")
     p.add_argument("--pick", choices=["highest", "loudest"], default=None,
@@ -186,8 +186,16 @@ def main(argv=None) -> int:
     for m in modes:
         # 5. 정리
         notes, st = clean(raw, cfg, m, grid, lo, hi, cfg["clean"]["low_conf"])
-        # 6. 운지
-        fs = assign_fingering(notes, open_midis, args.capo, cfg["fingering"], position=args.position, grid=grid)
+        # 6. 운지 (포지션: 숫자 / auto / none)
+        if args.position == "auto":
+            position, ranking = suggest_position(notes, open_midis, args.capo, cfg["fingering"], grid=grid)
+            print(f"   포지션 자동 제안: {position}프렛 (후보 비용: " + ", ".join(f"{p}→{c}" for p, c in ranking[:4]) + " …)")
+        elif args.position == "none":
+            position = None
+        else:
+            position = int(args.position)
+        fs = assign_fingering(notes, open_midis, args.capo, cfg["fingering"], position=position, grid=grid)
+        fs["position"] = position
         n_bars = max(n_bars, max((n.bar + 1 for n in notes), default=0))
         print(f"⑤⑥ [{m}] 정리: " + ", ".join(f"{k} {v}" for k, v in st.items())
               + f"\n       운지: " + ", ".join(f"{k} {v}" for k, v in fs.items()))

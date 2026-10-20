@@ -58,12 +58,13 @@ def _chord_candidates(notes: list[Note], open_midis, capo, w: dict) -> tuple[lis
 
 
 def _local_cost(assign, w: dict, position: int | None) -> float:
+    """음 하나(또는 동시 음)의 자리 비용. 포지션 벌점은 손 범위 창 [position, position+span] 밖으로 나간 프렛 거리에 비례
+    (개방현은 프렛 0으로 보아 창에서 position만큼 떨어진 것으로 친다)."""
     cost = 0.0
     for _, f in assign:
         cost += w["w_fret"] * f if f > 0 else w["w_open"]
-    hand = _hand(assign)
-    if position is not None and hand is not None:
-        cost += w["w_pos"] * abs(hand - position)
+        if position is not None:
+            cost += w["w_pos"] * max(0, position - f, f - (position + w["span"]))
     return cost
 
 
@@ -152,3 +153,36 @@ def assign_fingering(notes: list[Note], open_midis: list[int], capo: int, w: dic
         stats["unplayable"] += statuses[i] == "unplayable"
     stats["total_cost"] = round(dp[-1][choice[-1]][0], 2)
     return stats
+
+
+def path_cost(notes: list[Note], w: dict, grid=None) -> float:
+    """이미 배치된 notes의 경로 비용(포지션 가산점 제외) — 포지션 후보 비교용."""
+    events: dict[tuple[int, int], list[Note]] = {}
+    for n in notes:
+        events.setdefault((n.bar, n.t16), []).append(n)
+    keys = sorted(events)
+    total, prev, prev_hand, prev_t = 0.0, None, None, None
+    for k in keys:
+        assign = [(n.string, n.fret) for n in events[k]]
+        t = grid.time_of(*k) if grid else k[0] * 4 + k[1] / 4
+        total += _local_cost(assign, w, None)
+        if prev is not None:
+            total += _trans_cost(prev, prev_hand, assign, t - prev_t, w)
+        h = _hand(assign)
+        prev, prev_hand, prev_t = assign, (h if h is not None else prev_hand), t
+    return total
+
+
+def suggest_position(notes: list[Note], open_midis: list[int], capo: int, w: dict, grid=None,
+                     candidates=range(0, 13)) -> tuple[int, list[tuple[int, float]]]:
+    """선호 포지션 자동 제안. 후보 포지션마다 배치해 보고 총비용(손 범위 창 밖 벌점 + 이동 + 프렛 높이)이
+    가장 낮은 후보를 고른다 = 멜로디가 한 손 범위 안에 가장 잘 들어가는 자리.
+    반환: (제안 포지션, [(포지션, 비용), …] 비용 오름차순)"""
+    import copy
+    results = []
+    for p in candidates:
+        trial = copy.deepcopy(notes)
+        fs = assign_fingering(trial, open_midis, capo, w, position=p, grid=grid)
+        results.append((p, fs["total_cost"]))
+    results.sort(key=lambda x: (x[1], x[0]))
+    return results[0][0], results

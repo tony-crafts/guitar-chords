@@ -68,7 +68,7 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 | `--swing auto\|on\|off` | 스윙 격자(뒷박 8분음표 = 박의 2/3 지점). 기본 auto = 뒷박 위치 분포로 감지 |
 | `--phrase-offset on\|off` | 프레이즈(창) 단위로 오프셋을 따로 추정해 격자에 반영(기본 on). 근거가 확실한 창만 채택 |
 | `--phrase-bars N` | 프레이즈 창 길이(마디, 기본 3; 1마디씩 이동) |
-| `--position N` | 선호 포지션(프렛). 그 근처 운지에 가산점 |
+| `--position auto\|N\|none` | 손 범위 창의 시작 프렛. 창(N~N+4) 밖 음에 벌점. 기본 auto = 멜로디가 한 손 범위에 가장 잘 들어가는 자리를 자동 제안(실행 로그에 후보 비용 표시), none = 선호 없음 |
 | `--mode auto\|top\|poly\|both` | 멜로디 한 줄 / 동시 음 유지 / 둘 다 (기본 auto = 음원 성격으로 결정) |
 | `--pick highest\|loudest` | top 모드에서 멜로디 고르는 기준 |
 | `--no-separate` | 음원 분리 건너뜀(기타 단독 녹음 등) |
