@@ -36,3 +36,36 @@ def write_wav(path: str | Path, y: np.ndarray, sr: int) -> None:
     if y.ndim == 2 and y.shape[0] in (1, 2):   # (channels, n) → (n, channels)
         y = y.T
     sf.write(str(path), y, sr)
+
+
+def measure_lag(ref: np.ndarray, other: np.ndarray, sr: int, max_ms: float = 80.0,
+                window_s: float = 8.0) -> tuple[float, float]:
+    """other가 ref보다 몇 초 늦는지(양수 = 늦음)와 상관계수. 구간 3곳의 중앙값."""
+    L = int(window_s * sr)
+    maxlag = int(max_ms / 1000 * sr)
+    n = min(len(ref), len(other))
+    if n < L + 2 * maxlag + 1:
+        L = max(sr, n - 2 * maxlag - 1)
+    lags, cors = [], []
+    for frac in (0.15, 0.5, 0.85):
+        s = int(n * frac) - L // 2
+        s = max(maxlag, min(s, n - L - maxlag - 1))
+        x = ref[s:s + L]
+        if np.abs(x).max() < 1e-4:
+            continue
+        best = max(range(-maxlag, maxlag + 1), key=lambda k: np.dot(x, other[s + k:s + k + L]))
+        c = np.corrcoef(x, other[s + best:s + best + L])[0, 1]
+        lags.append(best); cors.append(c)
+    if not lags:
+        return 0.0, 0.0
+    return float(np.median(lags)) / sr, float(np.median(cors))
+
+
+def shift_audio(y: np.ndarray, lag_s: float, sr: int) -> np.ndarray:
+    """lag_s만큼 앞당긴다(양수 = 앞을 잘라냄, 음수 = 앞에 무음 추가). 길이는 유지."""
+    k = int(round(lag_s * sr))
+    if k > 0:
+        return np.concatenate([y[k:], np.zeros(k, dtype=y.dtype)])
+    if k < 0:
+        return np.concatenate([np.zeros(-k, dtype=y.dtype), y[:k]])
+    return y

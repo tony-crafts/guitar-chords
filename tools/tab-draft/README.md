@@ -73,6 +73,7 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 | `--min-note-ms` | 이보다 짧은 음은 버림(기본 60) |
 | `--conf-min` | 이보다 신뢰도 낮은 음은 버림(기본 0.25) |
 | `--onset-threshold` | Basic Pitch 음 시작 민감도(기본 0.5, 낮추면 더 많이 잡음) |
+| `--offset-ms N` | 음이 전체적으로 늦게 잡힐 때 N ms 앞당겨 격자에 맞춤(양수 = 앞당김) |
 | `--weights 파일` | 벌점·기준값 설정 파일(기본 `weights.toml`) |
 | `--out`, `--name` | 출력 폴더 / 이름 |
 
@@ -88,6 +89,8 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 - 터미널에 찍히는 `③ 음원 성격 판단`을 먼저 본다. 판단이 틀렸으면 `--mode`, `--ghost-ratio`로 바로잡는다.
 - `④ 박자`의 첫 마디 시작 시각이 틀리면 `--bar-offset` 또는 `--bpm`으로 보정.
 - `*.mix.wav`를 들으면서 틀린 음을 찾고 GP5/MusicXML에서 고친다.
+- 합성 음이 원곡보다 늦게 들리면: 실행 끝의 `확인: 합성 음이 원본보다 ±Nms`를 보고 `weights.toml`의 `[synth] lead_ms`를 올린다(기본 30).
+- Demucs MP3 스템은 원본보다 약 25ms 늦게 나오는데, 도구가 원본과 상호상관으로 자동으로 맞춘다(`스템이 원본보다 +25ms 늦어 맞춤` 메시지).
 
 ## 정확도 평가 (정답 운지가 있을 때)
 

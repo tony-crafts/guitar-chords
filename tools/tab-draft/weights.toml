@@ -39,6 +39,7 @@ fast_mult    = 1.6
 max_candidates = 40  # 동시 음 운지 후보 가지치기 수
 
 [synth]
+lead_ms    = 30      # 음 시작 검출이 실제 어택보다 늦는 만큼 합성 음을 앞당김(혼합 wav가 늦게 들리면 올림)
 decay      = 0.996   # 합성 기타 소리 감쇠(1에 가까울수록 길게 울림)
 gain       = 0.8
 mix_original = 0.45  # 혼합 wav에서 원곡 볼륨

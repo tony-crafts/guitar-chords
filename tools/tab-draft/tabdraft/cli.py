@@ -10,7 +10,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent          # tools/tab-draft
 sys.path.insert(0, str(HERE.parent))                   # tools/ → common 패키지
 
-from common.audio import load_audio, write_wav, duration_of   # noqa: E402
+from common.audio import load_audio, write_wav, duration_of, measure_lag, shift_audio   # noqa: E402
 from common.beats import track_beats                          # noqa: E402
 from .analyze import analyze, describe                        # noqa: E402
 from .fingering import assign_fingering                       # noqa: E402
@@ -19,7 +19,7 @@ from .model import parse_tuning, NOTE_NAMES                   # noqa: E402
 from .output_gp import write_gp5                              # noqa: E402
 from .output_text import render                               # noqa: E402
 from .output_xml import write_musicxml                        # noqa: E402
-from .synth import synthesize, mix                            # noqa: E402
+from .synth import synthesize, mix, check_lag                 # noqa: E402
 from .transcribe import transcribe                            # noqa: E402
 
 SR = 22050
@@ -54,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--onset-threshold", type=float, default=0.5, help="Basic Pitch 음 시작 민감도(낮을수록 많이 잡음)")
     p.add_argument("--frame-threshold", type=float, default=0.3)
     p.add_argument("--max-fret", type=int, default=None)
+    p.add_argument("--offset-ms", type=float, default=0.0,
+                   help="음이 전체적으로 늦게/빠르게 잡힐 때 보정. 양수 = 그만큼 앞당김")
     return p
 
 
@@ -95,11 +97,19 @@ def main(argv=None) -> int:
 
     # 구간 자르기
     y, sr = load_audio(src, sr=SR, start=args.start, end=end)
+    # 박자 추적과 혼합 wav는 분리 전 원곡으로(분리된 트랙만으로는 비트가 불안정)
+    y_orig = y
+    if src != audio:
+        y_orig = load_audio(audio, sr=SR, start=args.start, end=end)[0]
+        lag, cor = measure_lag(y_orig, y, sr)        # Demucs MP3 스템은 인코더 지연(≈25ms)으로 늦다
+        if abs(lag) >= 0.002 and cor > 0.3:
+            y = shift_audio(y, lag, sr)
+            print(f"   스템이 원본보다 {lag * 1000:+.0f}ms 늦어 맞춤 (상관 {cor:.2f})")
+    if args.offset_ms:
+        y = shift_audio(y, args.offset_ms / 1000, sr)
     seg_wav = out / "segment.wav"
     write_wav(seg_wav, y, sr)
     seg_dur = len(y) / sr
-    # 박자 추적과 혼합 wav는 분리 전 원곡으로(분리된 트랙만으로는 비트가 불안정)
-    y_orig = y if src == audio else load_audio(audio, sr=SR, start=args.start, end=end)[0]
 
     # 2. 음 추출
     print("② 음 추출: Basic Pitch", end="", flush=True)
@@ -124,6 +134,13 @@ def main(argv=None) -> int:
     grid = track_beats(y_orig, sr, bpm=args.bpm, beats_per_bar=args.beats_per_bar)
     if args.bar_offset:
         grid.downbeat_phase += args.bar_offset
+    if grid.source == "fixed" and raw:
+        import numpy as np
+        errs = np.array([grid.quantize(n.start)[2] for n in raw if n.conf >= cfg["clean"]["conf_min"]])
+        med = float(np.median(errs)) if len(errs) else 0.0
+        if abs(med) > 0.003:
+            grid.beat_times = grid.beat_times + med
+            grid.notes.append(f"격자를 음 시작 중심으로 {med * 1000:+.0f}ms 미세 보정")
     n_bars = grid.bar_count(seg_dur)
     print(f"④ 박자: {grid.bpm:.1f} BPM ({grid.source}), {n_bars}마디")
     for s in grid.notes:
@@ -147,7 +164,7 @@ def main(argv=None) -> int:
         (out / f"{m}.tab.txt").write_text(text + "\n", encoding="utf-8")
         data = {"name": name, "mode": m, "source": args.source, "start": args.start, "end": end,
                 "bpm": grid.bpm, "beats_per_bar": grid.beats_per_bar, "beat_source": grid.source,
-                "bar_start_s": grid.time_of(0, 0), "tuning": args.tuning, "capo": args.capo,
+                "bar_start_s": grid.time_of(0, 0) - cfg["synth"].get("lead_ms", 0) / 1000, "tuning": args.tuning, "capo": args.capo,
                 "n_bars": n_bars, "clean_stats": st, "fingering_stats": fs,
                 "bars": [{"n": b + 1, "notes": [n.to_dict() for n in notes if n.bar == b]} for b in range(n_bars)]}
         with open(out / f"{m}.json", "w") as f:
@@ -160,6 +177,8 @@ def main(argv=None) -> int:
         synth = synthesize(notes, grid, seg_dur, sr, cfg["synth"])
         write_wav(out / f"{m}.synth.wav", synth, sr)
         write_wav(out / f"{m}.mix.wav", mix(y_orig, synth, cfg["synth"]), sr)
+        lag = check_lag(y_orig, synth, sr)
+        print(f"   확인: 합성 음이 원본보다 {lag * 1000:+.0f}ms (±15ms 밖이면 weights.toml [synth] lead_ms 조절)")
         results[m] = text
         print(f"   → {out / (m + '.tab.txt')} · .json · .gp5 · .musicxml · .synth.wav · .mix.wav")
 
