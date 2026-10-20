@@ -172,7 +172,8 @@ def quantize(notes: list[Note], grid, mono: bool) -> tuple[list[Note], int]:
     return notes, collided
 
 
-def clean(notes: list[Note], cfg: dict, mode: str, grid, lo: int, hi: int, low_conf: float) -> tuple[list[Note], dict]:
+def clean(notes: list[Note], cfg: dict, mode: str, grid, lo: int, hi: int, low_conf: float,
+          do_quantize: bool = True) -> tuple[list[Note], dict]:
     """mode: 'top'(한 줄) | 'poly'(동시 음 유지). cfg = weights.toml [clean] + [melody]."""
     c = cfg["clean"]
     win = c["chord_window_ms"] / 1000
@@ -187,11 +188,16 @@ def clean(notes: list[Note], cfg: dict, mode: str, grid, lo: int, hi: int, low_c
     notes, stats["merged"] = merge_same_pitch(notes, c["merge_gap_ms"] / 1000)
     notes, stats["vibrato"] = absorb_vibrato(notes, c["vibrato_ms"] / 1000, c["merge_gap_ms"] / 1000)
     if mode == "top":
+        before = len(notes)
+        notes = [n for n in notes if n.conf >= c.get("top_conf_min", 0)]
+        stats["top_weak"] = before - len(notes)
         pick = cfg["melody"][cfg["melody"].get("pick", "highest")]
         notes, stats["accompaniment_dropped"] = pick_melody(notes, win, pick)
     else:
         notes, stats["voices_dropped"] = limit_voices(notes, win, c["max_voices"])
     stats["octave_shifted"] = fit_range(notes, lo, hi)
+    if not do_quantize:
+        return notes, stats
     notes, stats["grid_collisions"] = quantize(notes, grid, mono=(mode == "top"))
     for n in notes:
         if n.conf < low_conf:

@@ -23,20 +23,35 @@ class BeatGrid:
     beats_per_bar: int = 4
     downbeat_phase: int = 0         # beat_times[downbeat_phase]가 첫 마디 첫 박
     source: str = "librosa"         # 'fixed' | 'librosa'
+    swing: bool = False             # 스윙이면 박을 3등분해 뒷박 8분음표를 2/3 지점으로 본다
     notes: list[str] = field(default_factory=list)
 
     @property
     def sub(self) -> int:           # 마디당 16분음표 수
         return self.beats_per_bar * 4
 
+    def beat_pos(self, t: float) -> float:
+        """시각 → 다운비트 기준 박 위치(실수). 박 사이는 선형 보간."""
+        bt = self.beat_times
+        i = int(np.searchsorted(bt, t, side="right") - 1)
+        i = max(0, min(i, len(bt) - 2))
+        return i - self.downbeat_phase + (t - bt[i]) / (bt[i + 1] - bt[i])
+
+    # 스윙일 때 16분 칸 k ↔ 박 안 위치
+    _SWING_POS = (0.0, 1 / 3, 2 / 3, 5 / 6)
+
     def quantize(self, t: float, div: int = 4) -> tuple[int, int, float]:
-        """시각 → (마디, 16분 위치, 격자와의 오차 초). div=4면 박을 4등분(16분)."""
+        """시각 → (마디, 16분 위치, 격자와의 오차 초). div=4면 박을 4등분(16분).
+        스윙이면 박 안 위치를 0 / 1/3 / 2/3 로 나눠 k = 0 / 1 / 2 (뒷박 8분음표 = 2)."""
         bt = self.beat_times
         i = int(np.searchsorted(bt, t, side="right") - 1)
         i = max(0, min(i, len(bt) - 2))
         period = bt[i + 1] - bt[i]
         frac = (t - bt[i]) / period
-        k = int(round(frac * div))
+        if self.swing and div == 4:
+            k = 0 if frac < 0.2 else 1 if frac < 0.5 else 2 if frac < 0.84 else 4
+        else:
+            k = int(round(frac * div))
         beat_idx = i - self.downbeat_phase
         if k >= div:                                   # 다음 박으로 반올림
             k = 0
@@ -49,6 +64,9 @@ class BeatGrid:
         """다운비트 기준 박 위치(실수, 예: 2.25) → 초."""
         i = int(np.floor(beat_pos)) + self.downbeat_phase
         frac = beat_pos - np.floor(beat_pos)
+        if self.swing:
+            k = int(round(frac * 4)) % 4
+            frac = self._SWING_POS[k]
         bt = self.beat_times
         if i < 0:
             return float(bt[0] + (beat_pos + self.downbeat_phase) * (bt[1] - bt[0]))
@@ -133,3 +151,33 @@ def track_beats(y: np.ndarray, sr: int, bpm: float | None = None,
                     downbeat_phase=phase, source=source, notes=notes)
     grid.notes.append(f"첫 마디 시작 {grid.time_of(0, 0):.3f}s (온셋 세기로 추정 — 틀리면 --bar-offset 로 보정)")
     return grid
+
+
+def estimate_feel(onsets: list[tuple[float, float]], grid: BeatGrid,
+                  max_offset: float = 0.3) -> dict:
+    """멜로디 음 시작(시각, 가중치) 목록으로 ① 격자 오프셋 ② 스윙 여부를 함께 추정한다.
+
+    직선(뒷박 = 1/2)과 스윙(뒷박 = 2/3) 두 가설마다, 오프셋을 바꿔 가며
+    "음이 정박(가중 1.0) 또는 뒷박(가중 0.7) 위에 얼마나 모이는가" 점수를 매기고 최댓값을 고른다.
+    양수 오프셋 = 연주가 비트 격자보다 늦음.
+    """
+    if len(onsets) < 8:
+        return {"offset": 0.0, "swing": False, "offbeat_median": None, "n": len(onsets), "score": 0.0}
+    ts = np.array([t for t, _ in onsets]); ws = np.array([w for _, w in onsets])
+    base = np.array([grid.beat_pos(t) for t in ts])
+    beat = 60.0 / grid.bpm
+    hyps = {"straight": (0.5, 0.7), "swing": (2 / 3, 0.7)}
+    best = (-np.inf, 0.0, "straight")
+    for name, (p_off, w_off) in hyps.items():
+        for off in np.arange(-max_offset, max_offset + 1e-9, 0.005):
+            fr = (base - off / beat) % 1.0
+            sc_on = np.cos(2 * np.pi * fr)
+            sc_off = w_off * np.cos(2 * np.pi * (fr - p_off))
+            sc = float(np.sum(ws * np.maximum(sc_on, sc_off)))
+            if sc > best[0]:
+                best = (sc, float(off), name)
+    sc, off, name = best
+    fr = (base - off / beat) % 1.0
+    offb = fr[(fr > 0.3) & (fr < 0.95)]
+    med = float(np.median(offb)) if len(offb) >= 8 else None
+    return {"offset": off, "swing": name == "swing", "offbeat_median": med, "n": len(ts), "score": sc}

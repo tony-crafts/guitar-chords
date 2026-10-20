@@ -11,7 +11,7 @@ HERE = Path(__file__).resolve().parent.parent          # tools/tab-draft
 sys.path.insert(0, str(HERE.parent))                   # tools/ → common 패키지
 
 from common.audio import load_audio, write_wav, duration_of, measure_lag, shift_audio   # noqa: E402
-from common.beats import track_beats                          # noqa: E402
+from common.beats import track_beats, estimate_feel           # noqa: E402
 from .analyze import analyze, describe                        # noqa: E402
 from .fingering import assign_fingering                       # noqa: E402
 from .melody import clean                                     # noqa: E402
@@ -55,7 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--frame-threshold", type=float, default=0.3)
     p.add_argument("--max-fret", type=int, default=None)
     p.add_argument("--offset-ms", type=float, default=0.0,
-                   help="음이 전체적으로 늦게/빠르게 잡힐 때 보정. 양수 = 그만큼 앞당김")
+                   help="음원을 N ms 앞당겨 읽음(분리 트랙이 원곡과 어긋날 때). 보통은 --grid-offset 를 쓴다")
+    p.add_argument("--grid-offset", default="auto",
+                   help="멜로디가 비트보다 늦게/빠르게 연주될 때 격자를 옮김(ms, 양수 = 연주가 늦음). auto = 멜로디로 추정")
+    p.add_argument("--swing", choices=["auto", "on", "off"], default="auto",
+                   help="스윙 격자(뒷박 8분음표 = 박의 2/3). auto = 뒷박 위치로 감지")
     return p
 
 
@@ -141,6 +145,20 @@ def main(argv=None) -> int:
         if abs(med) > 0.003:
             grid.beat_times = grid.beat_times + med
             grid.notes.append(f"격자를 음 시작 중심으로 {med * 1000:+.0f}ms 미세 보정")
+    # 느낌(오프셋·스윙) 추정: 멜로디 한 줄을 미리 뽑아 그 음 시작으로 계산
+    lo_tmp, hi_tmp = open_midis[0] + args.capo, open_midis[-1] + cfg["fingering"]["max_fret"]
+    pre, _ = clean(raw, cfg, "top", grid, lo_tmp, hi_tmp, cfg["clean"]["low_conf"], do_quantize=False)
+    feel = estimate_feel([(n.start, n.conf * min(n.dur, 0.5)) for n in pre if n.dur >= 0.12], grid)
+    if args.grid_offset == "auto":
+        goff = feel["offset"]
+    else:
+        goff = float(args.grid_offset) / 1000
+    if abs(goff) >= 0.005:
+        grid.beat_times = grid.beat_times + goff
+        grid.notes.append(f"격자 오프셋 {goff * 1000:+.0f}ms ({'멜로디로 추정' if args.grid_offset == 'auto' else '지정'}; 양수 = 연주가 비트보다 늦음)")
+    grid.swing = feel["swing"] if args.swing == "auto" else (args.swing == "on")
+    medtxt = f"{feel['offbeat_median']:.2f}" if feel["offbeat_median"] is not None else "-"
+    grid.notes.append(f"{'스윙' if grid.swing else '직선'} 격자 (보정 후 뒷박 음 중앙값 위치 {medtxt}; 0.5 = 직선, 0.67 = 스윙)")
     n_bars = grid.bar_count(seg_dur)
     print(f"④ 박자: {grid.bpm:.1f} BPM ({grid.source}), {n_bars}마디")
     for s in grid.notes:
@@ -163,7 +181,7 @@ def main(argv=None) -> int:
         text = render(notes, n_bars, grid.sub, tuning_names, capo=args.capo, title=title)
         (out / f"{m}.tab.txt").write_text(text + "\n", encoding="utf-8")
         data = {"name": name, "mode": m, "source": args.source, "start": args.start, "end": end,
-                "bpm": grid.bpm, "beats_per_bar": grid.beats_per_bar, "beat_source": grid.source,
+                "bpm": grid.bpm, "beats_per_bar": grid.beats_per_bar, "beat_source": grid.source, "swing": grid.swing,
                 "bar_start_s": grid.time_of(0, 0) - cfg["synth"].get("lead_ms", 0) / 1000, "tuning": args.tuning, "capo": args.capo,
                 "n_bars": n_bars, "clean_stats": st, "fingering_stats": fs,
                 "bars": [{"n": b + 1, "notes": [n.to_dict() for n in notes if n.bar == b]} for b in range(n_bars)]}

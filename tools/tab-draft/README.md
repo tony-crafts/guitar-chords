@@ -64,6 +64,8 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 | `--bpm` | 템포를 알면 지정 — 박자 정렬이 훨씬 안정됨 |
 | `--beats-per-bar` | 한 마디 박 수(기본 4) |
 | `--bar-offset N` | 첫 마디 위치가 틀렸을 때 박 단위로 보정 |
+| `--grid-offset auto\|N` | 멜로디가 비트보다 늦게/빠르게 연주될 때 격자를 N ms 옮김(양수 = 연주가 늦음). 기본 auto = 멜로디 음 시작으로 추정 |
+| `--swing auto\|on\|off` | 스윙 격자(뒷박 8분음표 = 박의 2/3 지점). 기본 auto = 뒷박 위치 분포로 감지 |
 | `--position N` | 선호 포지션(프렛). 그 근처 운지에 가산점 |
 | `--mode auto\|top\|poly\|both` | 멜로디 한 줄 / 동시 음 유지 / 둘 다 (기본 auto = 음원 성격으로 결정) |
 | `--pick highest\|loudest` | top 모드에서 멜로디 고르는 기준 |
@@ -73,7 +75,7 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 | `--min-note-ms` | 이보다 짧은 음은 버림(기본 60) |
 | `--conf-min` | 이보다 신뢰도 낮은 음은 버림(기본 0.25) |
 | `--onset-threshold` | Basic Pitch 음 시작 민감도(기본 0.5, 낮추면 더 많이 잡음) |
-| `--offset-ms N` | 음이 전체적으로 늦게 잡힐 때 N ms 앞당겨 격자에 맞춤(양수 = 앞당김) |
+| `--offset-ms N` | 음원 자체를 N ms 앞당겨 읽음(분리 트랙이 원곡과 어긋날 때). 보통은 `--grid-offset`을 쓴다 |
 | `--weights 파일` | 벌점·기준값 설정 파일(기본 `weights.toml`) |
 | `--out`, `--name` | 출력 폴더 / 이름 |
 
@@ -88,8 +90,10 @@ Demucs 가상환경(`~/.venvs/demucs`, `scripts/make-stems.sh`와 공용)은 음
 - `( )` 괄호 = 신뢰도 낮음. 윗줄 `o` = 음역 밖이라 옥타브를 옮긴 음, `!` = 동시 음이 한 손으로 안 잡힘, `~` = 프렛 폭이 넓음.
 - 터미널에 찍히는 `③ 음원 성격 판단`을 먼저 본다. 판단이 틀렸으면 `--mode`, `--ghost-ratio`로 바로잡는다.
 - `④ 박자`의 첫 마디 시작 시각이 틀리면 `--bar-offset` 또는 `--bpm`으로 보정.
+- `④ 박자`에 `격자 오프셋 +140ms`, `스윙 격자`처럼 나오면 멜로디가 반주 비트보다 뒤에서(laid-back) 스윙으로 연주된다고 판단한 것. 틀리면 `--grid-offset 0`, `--swing off`.
+- 멜로디 한 줄(top) 모드에서 반주 음이 섞여 들어오면 `weights.toml`의 `top_conf_min`(기본 0.5)을 올리고, 멜로디가 빠지면 내린다.
 - `*.mix.wav`를 들으면서 틀린 음을 찾고 GP5/MusicXML에서 고친다.
-- 합성 음이 원곡보다 늦게 들리면: 실행 끝의 `확인: 합성 음이 원본보다 ±Nms`를 보고 `weights.toml`의 `[synth] lead_ms`를 올린다(기본 30).
+- 합성 음이 원곡보다 늦게 들리면: 실행 끝의 `확인: 합성 음이 원본보다 ±Nms`를 보고 `weights.toml`의 `[synth] lead_ms`를 올린다(기본 0, 격자가 멜로디 음 시작에 자동으로 맞춰지므로 보통 0으로 충분).
 - Demucs MP3 스템은 원본보다 약 25ms 늦게 나오는데, 도구가 원본과 상호상관으로 자동으로 맞춘다(`스템이 원본보다 +25ms 늦어 맞춤` 메시지).
 
 ## 정확도 평가 (정답 운지가 있을 때)
