@@ -41,14 +41,15 @@ def remove_ghosts(notes: list[Note], ratio: float, window: float) -> tuple[list[
     return keep, removed
 
 
-def merge_same_pitch(notes: list[Note], gap: float, min_gap: float = 0.015) -> tuple[list[Note], int]:
-    """끊긴 같은 음 합치기. 두 음 사이에 짧은 무음(min_gap~gap)이 있을 때만 합친다.
-    간격이 0(앞 음 끝 = 뒷 음 시작)이면 Basic Pitch가 재타격으로 나눈 것이므로 그대로 둔다."""
+def merge_same_pitch(notes: list[Note], gap: float, reattack_onset: float = 0.4) -> tuple[list[Note], int]:
+    """끊긴 같은 음 합치기. 같은 음이 gap 이내로 이어지면 합치되, 뒷 음 시작에 뚜렷한 어택(음 시작 확률 ≥ reattack_onset)이
+    있으면 재타격(다시 친 것)이므로 합치지 않는다. 어택 정보가 없는 음(onset < 0)은 간격이 15ms 이상일 때만 합친다."""
     out: list[Note] = []
     merged = 0
     for n in sorted(notes, key=lambda x: (x.midi, x.start)):
         g = n.start - out[-1].end if out else None
-        if out and out[-1].midi == n.midi and min_gap <= g < gap and "reattack" not in n.flags:
+        is_reattack = ("reattack" in n.flags) or (n.onset >= reattack_onset) or (n.onset < 0 and g is not None and g < 0.015)
+        if out and out[-1].midi == n.midi and g < gap and not is_reattack:
             out[-1].end = max(out[-1].end, n.end)
             out[-1].conf = max(out[-1].conf, n.conf)
             out[-1].flags.append("merged")
@@ -193,11 +194,17 @@ def clean(notes: list[Note], cfg: dict, mode: str, grid, lo: int, hi: int, low_c
     notes = [n for n in notes if n.conf >= c["conf_min"] and n.dur >= c["min_note_ms"] / 1000]
     stats["weak_or_short"] = before - len(notes)
     notes, stats["ghost"] = remove_ghosts(notes, c["ghost_ratio"], win)
-    notes, stats["merged"] = merge_same_pitch(notes, c["merge_gap_ms"] / 1000)
+    notes, stats["merged"] = merge_same_pitch(notes, c["merge_gap_ms"] / 1000, c.get("reattack_onset", 0.4))
     notes, stats["vibrato"] = absorb_vibrato(notes, c["vibrato_ms"] / 1000, c["merge_gap_ms"] / 1000)
     if mode == "top":
         before = len(notes)
-        notes = [n for n in notes if n.conf >= c.get("top_conf_min", 0)]
+        tcm = c.get("top_conf_min", 0)
+        if tcm == "auto":
+            import numpy as np
+            confs = np.array([n.conf for n in notes]) if notes else np.array([0.5])
+            tcm = float(min(0.50, max(0.42, np.percentile(confs, c.get("top_conf_pct", 60)))))
+        stats["top_conf_min"] = round(float(tcm), 2)
+        notes = [n for n in notes if n.conf >= tcm]
         stats["top_weak"] = before - len(notes)
         pick = cfg["melody"][cfg["melody"].get("pick", "highest")]
         notes, stats["accompaniment_dropped"] = pick_melody(notes, win, pick)

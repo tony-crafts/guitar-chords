@@ -43,7 +43,7 @@ def split_reattacks(notes: list[Note], onsets: "np.ndarray", fps: float, thresho
 
 def transcribe(wav_path: str | Path, onset_threshold: float = 0.5, frame_threshold: float = 0.3,
                min_note_ms: float = 60.0, min_freq: float = 70.0, max_freq: float = 1500.0,
-               midi_out: str | Path | None = None, reattack_threshold: float | None = 0.3,
+               midi_out: str | Path | None = None, reattack_threshold: float | None = 0.0,
                reattack_min_gap_ms: float = 80.0) -> tuple[list[Note], str]:
     """wav → Note 목록. 두 번째 반환값은 사용한 모델 백엔드 설명.
     reattack_threshold 가 있으면 음 시작 확률 지도로 재타격(같은 음 다시 치기)을 쪼갠다."""
@@ -67,6 +67,19 @@ def transcribe(wav_path: str | Path, onset_threshold: float = 0.5, frame_thresho
     notes = [Note(start=float(s), end=float(e), midi=int(p), conf=float(a)) for s, e, p, a, _ in events]
     notes.sort(key=lambda n: (n.start, -n.midi))
     info = f"basic-pitch {backend}"
+    # 음 시작 지점의 어택 세기: 시작 전후 100ms 창에서 같은 음높이 칸의 음 시작 확률 최대값
+    try:
+        from basic_pitch.constants import AUDIO_SAMPLE_RATE, FFT_HOP
+        fps = AUDIO_SAMPLE_RATE / FFT_HOP
+        onset_map = model_output["onset"]
+        for n in notes:
+            col = n.midi - 21
+            if 0 <= col < onset_map.shape[1]:
+                a = max(0, int(n.start * fps) - int(0.1 * fps)); b = min(onset_map.shape[0], int(n.start * fps) + int(0.1 * fps) + 1)
+                n.onset = float(onset_map[a:b, col].max()) if b > a else -1.0
+    except Exception as exc:  # 어택 정보는 보조 정보 — 실패해도 진행하되 이유는 알린다
+        import sys
+        print(f'(어택 세기 기록 실패: {exc!r})', file=sys.stderr)
     if reattack_threshold is not None and reattack_threshold > 0:
         from basic_pitch.constants import AUDIO_SAMPLE_RATE, FFT_HOP
         fps = AUDIO_SAMPLE_RATE / FFT_HOP
